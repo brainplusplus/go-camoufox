@@ -102,4 +102,5 @@ type BuiltLaunchOptions struct {
 	Proxy            *ProxyConfig
 	Extra            map[string]any
 	Config           map[string]any
+	VirtualDisplay   interface{ Close() error }
 }

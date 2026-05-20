@@ -24,15 +24,15 @@ func Warn(key string, iKnowWhatImDoing bool) {
 func WarnManualConfig(config map[string]any) {
 	for key := range config {
 		switch {
+		case key == "navigator.language" || key == "navigator.languages" || key == "headers.Accept-Language" || strings.HasPrefix(key, "locale:"):
+			Warn("locale", false)
+		case strings.HasPrefix(key, "geolocation:") || key == "timezone":
+			Warn("geolocation", false)
+		case key == "headers.User-Agent":
+			Warn("header-ua", false)
 		case strings.HasPrefix(key, "navigator."):
 			Warn("navigator", false)
-		case strings.HasPrefix(key, "locale:"):
-			Warn("locale", false)
-		case strings.HasPrefix(key, "geolocation:"):
-			Warn("geolocation", false)
-		case key == "header.User-Agent":
-			Warn("header-ua", false)
-		case strings.HasPrefix(key, "screen:") || strings.HasPrefix(key, "window."):
+		case strings.HasPrefix(key, "screen.") || strings.HasPrefix(key, "window.") || strings.HasPrefix(key, "document.body."):
 			Warn("viewport", false)
 		}
 	}

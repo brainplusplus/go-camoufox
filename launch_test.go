@@ -1,9 +1,12 @@
 package camoufox
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/brainplusplus/go-camoufox/geolocation"
 )
 
 func TestCamouConfigEnvChunksWindows(t *testing.T) {
@@ -87,6 +90,163 @@ func TestBuildLaunchOptionsRejectsInvalidOS(t *testing.T) {
 	_, err := BuildLaunchOptions(&LaunchOptions{OS: []string{"beos"}, ExecutablePath: "camoufox"})
 	if err == nil {
 		t.Fatal("expected invalid os error")
+	}
+}
+
+func TestBuildLaunchOptionsGeneratesEmbeddedFingerprint(t *testing.T) {
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		OS:             []string{"windows"},
+		ExecutablePath: "camoufox",
+		ExcludeAddons:  []DefaultAddon{AddonUBO},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"navigator.userAgent",
+		"navigator.platform",
+		"screen.width",
+		"webGl:vendor",
+		"webGl:renderer",
+		"fonts",
+		"voices",
+		"fonts:spacing_seed",
+		"audio:seed",
+		"canvas:seed",
+		"window.history.length",
+	} {
+		if _, ok := built.Config[key]; !ok {
+			t.Fatalf("generated config missing %s: %#v", key, built.Config)
+		}
+	}
+	if built.FirefoxUserPrefs["webgl.force-enabled"] != true {
+		t.Fatalf("expected webgl prefs to be merged: %#v", built.FirefoxUserPrefs)
+	}
+}
+
+func TestBuildLaunchOptionsPresetAndExplicitWebGL(t *testing.T) {
+	preset := map[string]any{
+		"navigator": map[string]any{
+			"userAgent":           "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+			"platform":            "Win32",
+			"hardwareConcurrency": float64(12),
+			"maxTouchPoints":      float64(0),
+		},
+		"screen": map[string]any{
+			"width":       float64(1920),
+			"height":      float64(1080),
+			"colorDepth":  float64(24),
+			"availWidth":  float64(1920),
+			"availHeight": float64(1032),
+		},
+		"webgl": map[string]any{
+			"unmaskedVendor":   "Google Inc. (Intel)",
+			"unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar",
+		},
+	}
+	ffVersion := 151
+	webgl := [2]string{"Google Inc. (Intel)", "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar"}
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		OS:                []string{"windows"},
+		FFVersion:         &ffVersion,
+		WebGLConfig:       &webgl,
+		FingerprintPreset: &FingerprintPreset{Preset: preset},
+		ExecutablePath:    "camoufox",
+		ExcludeAddons:     []DefaultAddon{AddonUBO},
+		IKnowWhatImDoing:  boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(built.Config["navigator.userAgent"].(string), "Firefox/151.0") {
+		t.Fatalf("expected ff_version in preset UA: %v", built.Config["navigator.userAgent"])
+	}
+	if built.Config["webGl:vendor"] != webgl[0] || built.Config["webGl:renderer"] != webgl[1] {
+		t.Fatalf("explicit webgl config not applied: %#v", built.Config)
+	}
+}
+
+func TestBuildLaunchOptionsGeoIPAutoUsesProxyAndPrecedence(t *testing.T) {
+	oldPublicIP := publicIP
+	oldGetGeolocation := getGeolocation
+	defer func() {
+		publicIP = oldPublicIP
+		getGeolocation = oldGetGeolocation
+	}()
+	var seenProxy string
+	publicIP = func(ctx context.Context, proxy string) (string, error) {
+		seenProxy = proxy
+		return "8.8.8.8", nil
+	}
+	getGeolocation = func(ctx context.Context, ip, db string) (*geolocation.Geolocation, error) {
+		if ip != "8.8.8.8" || db != "MaxMind GeoLite2" {
+			t.Fatalf("unexpected geolocation lookup ip=%q db=%q", ip, db)
+		}
+		return &geolocation.Geolocation{
+			Locale:    geolocation.Locale{Language: "en", Region: "US"},
+			Longitude: -122.33,
+			Latitude:  47.60,
+			Timezone:  "America/Los_Angeles",
+		}, nil
+	}
+	db := "MaxMind GeoLite2"
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		Config: map[string]any{
+			"timezone": "Asia/Jakarta",
+		},
+		GeoIP:            GeoIPAuto(),
+		GeoIPDB:          &db,
+		Proxy:            &ProxyConfig{Server: "socks5://127.0.0.1:1080", Username: "u", Password: "p"},
+		ExecutablePath:   "camoufox",
+		ExcludeAddons:    []DefaultAddon{AddonUBO},
+		IKnowWhatImDoing: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seenProxy != "socks5://u:p@127.0.0.1:1080" {
+		t.Fatalf("proxy was not used for public IP lookup: %q", seenProxy)
+	}
+	if built.Config["timezone"] != "Asia/Jakarta" {
+		t.Fatalf("user timezone should win: %#v", built.Config)
+	}
+	if built.Config["locale:language"] != "en" || built.Config["locale:region"] != "US" {
+		t.Fatalf("geo locale missing: %#v", built.Config)
+	}
+	if built.Config["geolocation:longitude"] != -122.33 || built.Config["geolocation:latitude"] != 47.60 {
+		t.Fatalf("geo coordinates missing: %#v", built.Config)
+	}
+	if built.Config["webrtc:ipv4"] != "8.8.8.8" {
+		t.Fatalf("webrtc ipv4 missing: %#v", built.Config)
+	}
+	if built.FirefoxUserPrefs["network.dns.disableIPv6"] != true {
+		t.Fatalf("expected IPv6 DNS pref for IPv4 WebRTC spoofing: %#v", built.FirefoxUserPrefs)
+	}
+}
+
+func TestBuildLaunchOptionsLocaleOverridesGeoIPLocale(t *testing.T) {
+	oldGetGeolocation := getGeolocation
+	defer func() { getGeolocation = oldGetGeolocation }()
+	getGeolocation = func(ctx context.Context, ip, db string) (*geolocation.Geolocation, error) {
+		return &geolocation.Geolocation{
+			Locale:    geolocation.Locale{Language: "en", Region: "US"},
+			Longitude: -122.33,
+			Latitude:  47.60,
+			Timezone:  "America/Los_Angeles",
+		}, nil
+	}
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		GeoIP:            GeoIPFromIP("8.8.8.8"),
+		Locale:           []string{"fr-FR"},
+		ExecutablePath:   "camoufox",
+		ExcludeAddons:    []DefaultAddon{AddonUBO},
+		IKnowWhatImDoing: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Config["locale:language"] != "fr" || built.Config["locale:region"] != "FR" {
+		t.Fatalf("explicit locale should override geoip locale: %#v", built.Config)
 	}
 }
 

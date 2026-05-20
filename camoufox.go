@@ -32,6 +32,9 @@ func NewBrowser(ctx context.Context, existing any, opts *LaunchOptions) (*Browse
 	}
 	launched, err := pw.Firefox.Launch(toPlaywrightLaunchOptions(built))
 	if err != nil {
+		if built.VirtualDisplay != nil {
+			_ = built.VirtualDisplay.Close()
+		}
 		if owned {
 			_ = pw.Stop()
 		}
@@ -58,6 +61,9 @@ func NewContext(ctx context.Context, existing any, opts *LaunchOptions) (*Browse
 	}
 	context, err := pw.Firefox.LaunchPersistentContext("", toPlaywrightPersistentOptions(built))
 	if err != nil {
+		if built.VirtualDisplay != nil {
+			_ = built.VirtualDisplay.Close()
+		}
 		if owned {
 			_ = pw.Stop()
 		}
@@ -88,6 +94,11 @@ func (b *Browser) Close(ctx context.Context) error {
 	}
 	if b.Playwright != nil {
 		if err := b.Playwright.Stop(); closeErr == nil {
+			closeErr = err
+		}
+	}
+	if b.Options != nil && b.Options.VirtualDisplay != nil {
+		if err := b.Options.VirtualDisplay.Close(); closeErr == nil {
 			closeErr = err
 		}
 	}

@@ -1,17 +1,22 @@
 package camoufox
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/brainplusplus/go-camoufox/addons"
+	"github.com/brainplusplus/go-camoufox/fingerprint"
+	"github.com/brainplusplus/go-camoufox/geolocation"
 	internalconfig "github.com/brainplusplus/go-camoufox/internal/config"
 	"github.com/brainplusplus/go-camoufox/pkgman"
+	"github.com/brainplusplus/go-camoufox/virtdisplay"
 	"github.com/brainplusplus/go-camoufox/warnings"
 )
 
@@ -28,6 +33,13 @@ var validFingerprintOS = map[string]struct{}{
 	"macos":   {},
 	"linux":   {},
 }
+
+const defaultFirefoxMajor = 150
+
+var (
+	publicIP       = geolocation.PublicIP
+	getGeolocation = geolocation.GetGeolocation
+)
 
 func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 	if opts == nil {
@@ -50,18 +62,37 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		headlessMode = *opts.Headless
 	}
 
+	var virtualDisplay interface{ Close() error }
+	if headlessMode == HeadlessVirtual {
+		display := ""
+		if opts.VirtualDisplay != nil {
+			display = *opts.VirtualDisplay
+		}
+		debug := boolValue(opts.Debug)
+		vd, err := virtdisplay.New(display, debug)
+		if err != nil {
+			return nil, err
+		}
+		virtualDisplay = vd
+		virtdisplay.ApplyEnv(env, vd.Display)
+		headlessMode = HeadlessFalse
+	}
+
 	if opts.VirtualDisplay != nil && *opts.VirtualDisplay != "" {
-		env["DISPLAY"] = *opts.VirtualDisplay
-		env["GDK_BACKEND"] = "x11"
-		delete(env, "WAYLAND_DISPLAY")
-		env["MOZ_ENABLE_WAYLAND"] = "0"
+		virtdisplay.ApplyEnv(env, *opts.VirtualDisplay)
+	}
+	fail := func(err error) (*BuiltLaunchOptions, error) {
+		if virtualDisplay != nil {
+			_ = virtualDisplay.Close()
+		}
+		return nil, err
 	}
 
 	if err := checkValidOS(opts.OS); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if len(opts.OS) == 0 && opts.WebGLConfig != nil {
-		return nil, errors.New("os must be set when using webgl_config")
+		return fail(errors.New("os must be set when using webgl_config"))
 	}
 
 	iKnow := opts.IKnowWhatImDoing != nil && *opts.IKnowWhatImDoing
@@ -69,13 +100,19 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		warnings.WarnManualConfig(config)
 	}
 
+	ffVersion := defaultFirefoxMajor
+	if opts.FFVersion != nil {
+		ffVersion = *opts.FFVersion
+		warnings.Warn("ff_version", iKnow)
+	}
+
 	addonList := append([]string(nil), opts.Addons...)
 	if err := addons.AddDefaultAddons(&addonList, opts.ExcludeAddons); err != nil {
-		return nil, err
+		return fail(err)
 	}
 	if len(addonList) > 0 {
 		if err := addons.ConfirmPaths(addonList); err != nil {
-			return nil, err
+			return fail(err)
 		}
 		config["addons"] = addonList
 	}
@@ -86,13 +123,27 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 	if boolValue(opts.CustomFontsOnly) {
 		firefoxPrefs["gfx.bundled-fonts.activate"] = 0
 		if len(opts.Fonts) == 0 {
-			return nil, errors.New("no custom fonts were passed, but custom_fonts_only is enabled")
+			return fail(errors.New("no custom fonts were passed, but custom_fonts_only is enabled"))
 		}
-		warnings.Warn("custom_fonts_only", iKnow)
+		warnings.Warn("custom_fonts_only", false)
 	}
 
-	if opts.GeoIP == nil && opts.Proxy != nil && !strings.Contains(opts.Proxy.Server, "localhost") && !isDomainSet(config, "geolocation") {
+	if err := applyFingerprintOptions(config, opts, ffVersion, iKnow); err != nil {
+		return fail(err)
+	}
+
+	if opts.GeoIP != nil {
+		if err := applyGeoIP(config, firefoxPrefs, opts); err != nil {
+			return fail(err)
+		}
+	} else if opts.Proxy != nil && !strings.Contains(opts.Proxy.Server, "localhost") && !isDomainSet(config, "geolocation") {
 		warnings.Warn("proxy_without_geoip", false)
+	}
+
+	if len(opts.Locale) > 0 {
+		if err := geolocation.HandleLocales(opts.Locale, config); err != nil {
+			return fail(err)
+		}
 	}
 
 	if opts.Humanize != nil && opts.Humanize.Enabled {
@@ -119,6 +170,26 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 	if boolValue(opts.BlockWebGL) {
 		warnings.Warn("block_webgl", iKnow)
 		firefoxPrefs["webgl.disabled"] = true
+	} else {
+		targetOS := fingerprint.TargetOSFromConfig(config)
+		var vendor, renderer string
+		if opts.WebGLConfig != nil {
+			vendor, renderer = opts.WebGLConfig[0], opts.WebGLConfig[1]
+		} else {
+			vendor, _ = config["webGl:vendor"].(string)
+			renderer, _ = config["webGl:renderer"].(string)
+		}
+		if webgl, err := fingerprint.SampleWebGL(targetOS, vendor, renderer, nil); err == nil {
+			enableWebGL2, _ := webgl["webGl2Enabled"].(bool)
+			delete(webgl, "webGl2Enabled")
+			fingerprint.MergeInto(config, webgl)
+			fingerprint.MergeInto(firefoxPrefs, map[string]any{
+				"webgl.enable-webgl2": enableWebGL2,
+				"webgl.force-enabled": true,
+			})
+		} else if opts.WebGLConfig != nil {
+			return fail(err)
+		}
 	}
 	if boolValue(opts.EnableCache) {
 		for key, value := range CachePrefs {
@@ -127,12 +198,12 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 	}
 
 	if err := internalconfig.Validate(config); err != nil {
-		return nil, err
+		return fail(err)
 	}
 
 	camouEnv, err := CamouConfigEnv(config, runtime.GOOS)
 	if err != nil {
-		return nil, err
+		return fail(err)
 	}
 	for key, value := range camouEnv {
 		env[key] = value
@@ -146,7 +217,7 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 			executablePath, err = pkgman.LaunchPath("")
 		}
 		if err != nil {
-			return nil, err
+			return fail(err)
 		}
 	}
 
@@ -159,7 +230,60 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		Proxy:            opts.Proxy,
 		Extra:            cloneAnyMap(opts.Extra),
 		Config:           config,
+		VirtualDisplay:   virtualDisplay,
 	}, nil
+}
+
+func applyGeoIP(config, firefoxPrefs map[string]any, opts *LaunchOptions) error {
+	ip := opts.GeoIP.IP
+	if opts.GeoIP.Auto {
+		proxyString := ""
+		if opts.Proxy != nil {
+			var err error
+			proxyString, err = (geolocation.Proxy{
+				Server:   opts.Proxy.Server,
+				Username: opts.Proxy.Username,
+				Password: opts.Proxy.Password,
+				Bypass:   opts.Proxy.Bypass,
+			}).AsString()
+			if err != nil {
+				return err
+			}
+		}
+		resolved, err := publicIP(context.Background(), proxyString)
+		if err != nil {
+			return err
+		}
+		ip = resolved
+	}
+	if ip == "" {
+		return errors.New("geoip requires either Auto or an IP address")
+	}
+	if !boolValue(opts.BlockWebRTC) {
+		if geolocation.ValidIPv4(ip) {
+			fingerprint.SetInto(config, "webrtc:ipv4", ip)
+			firefoxPrefs["network.dns.disableIPv6"] = true
+		} else if geolocation.ValidIPv6(ip) {
+			fingerprint.SetInto(config, "webrtc:ipv6", ip)
+		}
+	}
+	geoipDB := ""
+	if opts.GeoIPDB != nil {
+		geoipDB = *opts.GeoIPDB
+	}
+	geo, err := getGeolocation(context.Background(), ip, geoipDB)
+	if err != nil {
+		return err
+	}
+	for key, value := range geo.AsConfig() {
+		switch key {
+		case "timezone", "locale:language", "locale:region", "locale:script":
+			fingerprint.SetInto(config, key, value)
+		default:
+			config[key] = value
+		}
+	}
+	return nil
 }
 
 func CamouConfigEnv(config map[string]any, goos string) (map[string]string, error) {
@@ -194,6 +318,97 @@ func checkValidOS(values []string) error {
 		}
 	}
 	return nil
+}
+
+func applyFingerprintOptions(config map[string]any, opts *LaunchOptions, ffVersion int, iKnow bool) error {
+	usedPreset := false
+	ffVersionStr := strconv.Itoa(ffVersion)
+	if opts.Fingerprint != nil {
+		if !iKnow && opts.Fingerprint.UserAgent != "" && !strings.Contains(opts.Fingerprint.UserAgent, "Firefox") {
+			return fmt.Errorf("%q fingerprints are not supported in Camoufox", opts.Fingerprint.UserAgent)
+		}
+		if !iKnow {
+			warnings.Warn("custom_fingerprint", false)
+		}
+		if opts.Fingerprint.Raw != nil {
+			fp, err := fingerprint.FromBrowserForge(&fingerprint.BrowserForgeFingerprint{Raw: opts.Fingerprint.Raw}, ffVersionStr)
+			if err != nil {
+				return err
+			}
+			fingerprint.MergeInto(config, fp)
+		}
+		if opts.Fingerprint.UserAgent != "" {
+			fingerprint.SetInto(config, "navigator.userAgent", opts.Fingerprint.UserAgent)
+		}
+	} else if opts.FingerprintPreset != nil {
+		var preset map[string]any
+		var err error
+		if opts.FingerprintPreset.Preset != nil {
+			preset = opts.FingerprintPreset.Preset
+		} else if opts.FingerprintPreset.UseRandom {
+			preset, err = fingerprint.GetRandomPreset(opts.OS, ffVersionStr, nil)
+			if err != nil {
+				return err
+			}
+		}
+		if preset != nil {
+			fp, err := fingerprint.FromPreset(preset, ffVersionStr, nil)
+			if err != nil {
+				return err
+			}
+			fingerprint.MergeInto(config, fp)
+			usedPreset = true
+		}
+	}
+
+	if !usedPreset && opts.Fingerprint == nil {
+		fp, err := fingerprint.GenerateFingerprint(opts.OS, opts.Window, ffVersionStr, nil)
+		if err != nil {
+			return err
+		}
+		converted, err := fingerprint.FromBrowserForge(fp, ffVersionStr)
+		if err != nil {
+			return err
+		}
+		fingerprint.MergeInto(config, converted)
+	}
+
+	targetOS := fingerprint.TargetOSFromConfig(config)
+	fingerprint.SetInto(config, "window.history.length", randomRange(1, 6))
+	if _, ok := config["fonts"]; !ok && !boolValue(opts.CustomFontsOnly) {
+		if fonts, err := fingerprint.GenerateRandomFontSubset(targetOS, nil); err == nil {
+			config["fonts"] = fonts
+		}
+	}
+	if _, ok := config["voices"]; !ok {
+		if voices, err := fingerprint.GenerateRandomVoiceSubset(targetOS, nil); err == nil {
+			config["voices"] = voices
+		}
+	}
+	fingerprint.SetInto(config, "fonts:spacing_seed", randomSeed())
+	fingerprint.SetInto(config, "audio:seed", randomSeed())
+	fingerprint.SetInto(config, "canvas:seed", randomSeed())
+	return nil
+}
+
+func randomRange(minInclusive, maxExclusive int) int {
+	var value int
+	_ = fingerprint.WithGlobalRNG(func(rng fingerprint.RNG) error {
+		value = minInclusive + rng.Intn(maxExclusive-minInclusive)
+		return nil
+	})
+	return value
+}
+
+func randomSeed() uint32 {
+	var value uint32
+	_ = fingerprint.WithGlobalRNG(func(rng fingerprint.RNG) error {
+		for value == 0 {
+			value = rng.Uint32()
+		}
+		return nil
+	})
+	return value
 }
 
 func boolValue(value *bool) bool {
