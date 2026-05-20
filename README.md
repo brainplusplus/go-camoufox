@@ -4,7 +4,92 @@
 browser binary. It ports the Python Camoufox launch/config pipeline into Go and
 adds a native WebDriver BiDi server path for multi-language browser automation.
 
+Upstream reference project:
+[daijro/camoufox](https://github.com/daijro/camoufox)
+
 Current release target: `0.1.0`.
+
+## Why This Exists
+
+Python Camoufox from [daijro/camoufox](https://github.com/daijro/camoufox) is
+already useful and battle-tested. `go-camoufox` exists
+because some teams need the same Camoufox browser behavior in environments
+where a Go binary is easier to run, ship, or embed than a Python launcher.
+
+The main motivations are:
+
+- Reduce launcher/runtime overhead for Go-heavy tooling and automation stacks.
+- Make it easier to expose Camoufox as a single process with a WebDriver BiDi
+  endpoint for other languages and agents.
+- Fit better into Go services, goroutine-based worker pools, and containerized
+  workloads that want fewer moving parts around the launcher layer.
+- Keep the Camoufox browser binary itself unchanged while replacing the Python
+  orchestration layer with Go.
+
+This project does **not** replace the C++ browser patches that make Camoufox
+Camoufox. It still relies on the upstream Camoufox Firefox binary and release
+artifacts.
+
+## How It Differs From Python Camoufox
+
+At a high level, Python Camoufox and `go-camoufox` aim at the same browser
+target but take different approaches in the launcher layer.
+
+Python Camoufox:
+
+- Is the upstream reference implementation.
+- Has the most mature API surface and real-world compatibility today.
+- Feels natural if your automation stack is already Python + Playwright.
+- Is the best baseline when you want the closest thing to official upstream
+  behavior without translating concepts across runtimes.
+
+`go-camoufox`:
+
+- Reimplements the launcher/config pipeline in Go.
+- Keeps a Playwright-compatible Go API for convenience.
+- Adds a native WebDriver BiDi server path so other languages can connect over
+  WebSocket without Python in the main runtime path.
+- Is better suited to Go-based worker systems, embedded services, and
+  agent-oriented automation infrastructure.
+
+In practice, the biggest conceptual difference is this:
+
+- Python Camoufox is primarily a Python library with launcher helpers.
+- `go-camoufox` is primarily a Go launcher/runtime wrapper around the same
+  browser binary, with BiDi exposure as a first-class path.
+
+## Pros And Cons
+
+Pros of `go-camoufox`:
+
+- Easier to embed in Go applications and worker services.
+- Native WebDriver BiDi server path for multi-language clients.
+- Single compiled launcher binary is convenient for distribution.
+- Natural fit for concurrency-heavy Go workloads and browser pooling.
+- Good base for agent tooling that wants a long-lived browser endpoint.
+
+Cons of `go-camoufox`:
+
+- Upstream Python Camoufox is still the reference, so parity work is ongoing.
+- Some ecosystem examples and assumptions still center on Python first.
+- Client-library behavior around BiDi can vary, especially outside raw BiDi
+  flows.
+- Release availability is currently limited by what the configured Camoufox
+  repos expose.
+- If your team is already happy with Python Camoufox, switching may add moving
+  parts without enough upside.
+
+When to choose Python Camoufox:
+
+- You want the upstream implementation with the least translation risk.
+- Your team already works in Python and Playwright.
+- You care more about maturity and upstream symmetry than Go integration.
+
+When to choose `go-camoufox`:
+
+- You want Camoufox inside a Go service, CLI, pool, or agent runtime.
+- You want to expose one BiDi endpoint and let other languages attach.
+- You want a launcher binary that fits better into Go-first deployment flows.
 
 ## Status
 
