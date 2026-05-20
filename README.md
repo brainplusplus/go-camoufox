@@ -1,20 +1,39 @@
-# go-camoufox
+<p align="center">
+  <img src="assets/readme/go-camoufox-banner.svg" alt="go-camoufox banner" width="100%" />
+</p>
 
-`go-camoufox` is a Go launcher and orchestration layer for the Camoufox Firefox
-browser binary. It ports the Python Camoufox launch/config pipeline into Go and
-adds a native WebDriver BiDi server path for multi-language browser automation.
+<p align="center">
+  <strong>Go launcher, config pipeline, and native WebDriver BiDi runtime for Camoufox.</strong>
+</p>
 
-Upstream reference project:
-[daijro/camoufox](https://github.com/daijro/camoufox)
+<p align="center">
+  <a href="https://github.com/brainplusplus/go-camoufox/releases/tag/v0.1.0">v0.1.0</a>
+  &middot;
+  <a href="https://github.com/daijro/camoufox">Upstream Camoufox</a>
+  &middot;
+  <a href="examples/README.md">Examples</a>
+  &middot;
+  <a href="docs/api.md">Docs</a>
+</p>
+
+`go-camoufox` ports the Python Camoufox launch/config pipeline into Go and adds
+a native WebDriver BiDi server path for multi-language browser automation.
 
 Current release target: `0.1.0`.
+
+## At A Glance
+
+- Use the upstream Camoufox browser binary from [daijro/camoufox](https://github.com/daijro/camoufox).
+- Launch Camoufox from Go without Python in the main runtime path.
+- Expose a WebDriver BiDi endpoint that other languages and agents can attach to.
+- Keep a Playwright-compatible Go API alongside the native BiDi server path.
 
 ## Why This Exists
 
 Python Camoufox from [daijro/camoufox](https://github.com/daijro/camoufox) is
-already useful and battle-tested. `go-camoufox` exists
-because some teams need the same Camoufox browser behavior in environments
-where a Go binary is easier to run, ship, or embed than a Python launcher.
+already useful and battle-tested. `go-camoufox` exists because some teams need
+the same Camoufox browser behavior in environments where a Go binary is easier
+to run, ship, or embed than a Python launcher.
 
 The main motivations are:
 

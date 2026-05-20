@@ -1,0 +1,32 @@
+<svg width="1280" height="360" viewBox="0 0 1280 360" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="126" y1="82" x2="270" y2="242" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CF0CF"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="text" x1="360" y1="96" x2="928" y2="252" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7CF0CF"/>
+      <stop offset="1" stop-color="#38BDF8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="360" rx="18" fill="url(#bg)"/>
+
+  <path d="M0 98L70 80L138 103L223 71L300 96L390 82L494 112L603 73L714 111L824 86L936 119L1050 74L1169 107L1280 82V168H0V98Z" fill="#2A2139" opacity="0.9"/>
+  <path d="M0 240L95 192L183 228L287 174L369 208L474 167L593 210L706 176L796 212L888 186L999 224L1112 171L1219 207L1280 186V360H0V240Z" fill="#191624"/>
+  <path d="M0 280L103 230L203 262L298 226L386 258L481 214L592 264L708 224L823 262L941 232L1034 267L1135 218L1232 256L1280 243V360H0V280Z" fill="#0D1019"/>
+
+  <circle cx="190" cy="178" r="104" fill="none" stroke="url(#accent)" stroke-width="10"/>
+  <path d="M149 137C169 122 194 117 223 121C244 124 264 135 277 150L259 156L275 168L295 164C287 142 271 122 248 109C224 96 191 94 162 103C136 111 111 129 97 154L113 158C122 149 134 142 149 137Z" fill="url(#accent)"/>
+  <path d="M126 194C135 177 152 166 174 163L212 154L238 164L223 176L246 184L228 201L197 211L164 214L138 211L123 204L126 194Z" fill="url(#accent)"/>
+  <path d="M135 214C145 226 165 232 190 232C214 232 232 227 243 219L259 228C244 244 220 254 190 254C159 254 133 244 119 227L135 214Z" fill="url(#accent)"/>
+  <ellipse cx="208" cy="160" rx="12" ry="10" fill="#111827"/>
+  <circle cx="212" cy="158" r="3.6" fill="#A7F3D0"/>
+
+  <text x="352" y="212" fill="url(#text)" font-family="Segoe UI, Arial, sans-serif" font-size="118" font-weight="300" letter-spacing="0">go-camoufox</text>
+  <text x="358" y="258" fill="#C7F9E8" font-family="Segoe UI, Arial, sans-serif" font-size="28" font-weight="500" letter-spacing="0.5">Go launcher, config pipeline, and native WebDriver BiDi runtime for Camoufox</text>
+</svg>
