@@ -3,7 +3,9 @@ package camoufox
 import (
 	"context"
 	"errors"
+	"os"
 
+	"github.com/brainplusplus/go-camoufox/protocol/bidi"
 	playwright "github.com/playwright-community/playwright-go"
 )
 
@@ -109,10 +111,74 @@ func LaunchServer(ctx context.Context, opts *LaunchOptions) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if _, err := BuildLaunchOptions(opts); err != nil {
+	built, err := BuildLaunchOptions(opts)
+	if err != nil {
 		return "", err
 	}
-	return "", errors.New("launch server is not implemented yet; Phase 4 will provide native WebDriver BiDi")
+	server, err := LaunchServerHandle(ctx, built)
+	if err != nil {
+		return "", err
+	}
+	return server.Endpoint(), nil
+}
+
+func LaunchServerHandle(ctx context.Context, built *BuiltLaunchOptions) (*bidi.Server, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if built == nil {
+		return nil, errors.New("built launch options are required")
+	}
+	var proxy *bidi.ProxyConfig
+	if built.Proxy != nil {
+		proxy = &bidi.ProxyConfig{
+			Server:   built.Proxy.Server,
+			Bypass:   built.Proxy.Bypass,
+			Username: built.Proxy.Username,
+			Password: built.Proxy.Password,
+		}
+	}
+	return bidi.Launch(ctx, bidi.Options{
+		ExecutablePath: built.ExecutablePath,
+		Args:           built.Args,
+		Env:            built.Env,
+		FirefoxPrefs:   built.FirefoxUserPrefs,
+		Headless:       built.Headless,
+		Proxy:          proxy,
+		Stdout:         os.Stderr,
+		Stderr:         os.Stderr,
+	})
+}
+
+func LaunchServerHandleWithOptions(ctx context.Context, built *BuiltLaunchOptions, serverOptions bidi.Options) (*bidi.Server, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if built == nil {
+		return nil, errors.New("built launch options are required")
+	}
+	var proxy *bidi.ProxyConfig
+	if built.Proxy != nil {
+		proxy = &bidi.ProxyConfig{
+			Server:   built.Proxy.Server,
+			Bypass:   built.Proxy.Bypass,
+			Username: built.Proxy.Username,
+			Password: built.Proxy.Password,
+		}
+	}
+	serverOptions.ExecutablePath = built.ExecutablePath
+	serverOptions.Args = built.Args
+	serverOptions.Env = built.Env
+	serverOptions.FirefoxPrefs = built.FirefoxUserPrefs
+	serverOptions.Headless = built.Headless
+	serverOptions.Proxy = proxy
+	if serverOptions.Stdout == nil {
+		serverOptions.Stdout = os.Stderr
+	}
+	if serverOptions.Stderr == nil {
+		serverOptions.Stderr = os.Stderr
+	}
+	return bidi.Launch(ctx, serverOptions)
 }
 
 func resolvePlaywright(existing any) (*playwright.Playwright, bool, error) {

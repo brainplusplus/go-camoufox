@@ -3,6 +3,7 @@ module github.com/brainplusplus/go-camoufox
 go 1.24
 
 require (
+	github.com/gorilla/websocket v1.5.3
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/playwright-community/playwright-go v0.5700.1
 	gopkg.in/yaml.v3 v3.0.1

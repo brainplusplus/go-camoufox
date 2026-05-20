@@ -1,0 +1,26 @@
+services:
+  camoufox:
+    build:
+      context: .
+    environment:
+      GO_CAMOUFOX_CACHE: /home/camoufox/.cache/go-camoufox
+      # Set to 1 to download a browser when the container starts.
+      GO_CAMOUFOX_FETCH_ON_START: "0"
+      # Optional version when GO_CAMOUFOX_FETCH_ON_START=1.
+      # GO_CAMOUFOX_FETCH_VERSION: "135.0.1-beta.24"
+    volumes:
+      - go-camoufox-cache:/home/camoufox/.cache/go-camoufox
+    ports:
+      - "9222:9222"
+    command:
+      - server
+      - --listen
+      - 0.0.0.0:9222
+      - --headless
+      - --no-default-addons
+      - --os
+      - windows
+      - --i-know-what-im-doing
+
+volumes:
+  go-camoufox-cache:

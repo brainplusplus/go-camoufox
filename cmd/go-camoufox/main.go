@@ -2,18 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"strconv"
+	"strings"
 	"time"
 
 	camoufox "github.com/brainplusplus/go-camoufox"
 	"github.com/brainplusplus/go-camoufox/addons"
 	"github.com/brainplusplus/go-camoufox/pkgman"
+	"github.com/brainplusplus/go-camoufox/protocol/bidi"
 )
 
-const version = "0.1.0-draft"
+var version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -51,6 +56,8 @@ func run(args []string) error {
 		return fetch(args[1:])
 	case "run":
 		return runBrowser(args[1:])
+	case "server":
+		return runServer(args[1:])
 	case "install-driver":
 		return camoufox.InstallPlaywrightDriver(context.Background())
 	default:
@@ -159,6 +166,111 @@ func runBrowser(args []string) error {
 	return nil
 }
 
+func runServer(args []string) error {
+	fs := flag.NewFlagSet("server", flag.ContinueOnError)
+	headless := fs.Bool("headless", false, "run headless")
+	executablePath := fs.String("executable-path", "", "path to Camoufox executable")
+	browser := fs.String("browser", "", "installed browser specifier")
+	noDefaultAddons := fs.Bool("no-default-addons", false, "skip default addons")
+	optionsJSON := fs.String("options-json", "", "inline LaunchOptions JSON or path to a JSON file")
+	proxyServer := fs.String("proxy-server", "", "proxy server URL")
+	proxyBypass := fs.String("proxy-bypass", "", "proxy bypass list")
+	proxyUsername := fs.String("proxy-username", "", "proxy username")
+	proxyPassword := fs.String("proxy-password", "", "proxy password")
+	virtualDisplay := fs.String("virtual-display", "", "DISPLAY value for virtual display mode")
+	listen := fs.String("listen", "127.0.0.1:0", "BiDi server listen address")
+	var osValues, locales, extraArgs, envValues, prefValues, configValues repeatFlag
+	fs.Var(&osValues, "os", "fingerprint OS target; repeatable")
+	fs.Var(&locales, "locale", "locale such as en-US; repeatable")
+	fs.Var(&extraArgs, "arg", "extra browser argument; repeatable")
+	fs.Var(&envValues, "env", "environment KEY=VALUE; repeatable")
+	fs.Var(&prefValues, "pref", "Firefox pref KEY=VALUE; repeatable")
+	fs.Var(&configValues, "config", "Camoufox config KEY=VALUE; repeatable")
+	blockImages := fs.Bool("block-images", false, "block images")
+	blockWebRTC := fs.Bool("block-webrtc", false, "block WebRTC")
+	blockWebGL := fs.Bool("block-webgl", false, "block WebGL")
+	enableCache := fs.Bool("enable-cache", false, "enable Firefox cache prefs")
+	mainWorldEval := fs.Bool("main-world-eval", false, "allow main-world evaluation")
+	iKnow := fs.Bool("i-know-what-im-doing", false, "suppress leak warnings")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	opts := &camoufox.LaunchOptions{}
+	if *optionsJSON != "" {
+		loaded, err := loadLaunchOptionsJSON(*optionsJSON)
+		if err != nil {
+			return err
+		}
+		opts = loaded
+	}
+	mode := camoufox.HeadlessFalse
+	if *headless {
+		mode = camoufox.HeadlessTrue
+		opts.Headless = &mode
+	}
+	opts.ExecutablePath = firstNonEmpty(*executablePath, opts.ExecutablePath)
+	if *browser != "" {
+		opts.Browser = browser
+	}
+	if *noDefaultAddons {
+		opts.ExcludeAddons = []camoufox.DefaultAddon{camoufox.AddonUBO}
+	}
+	if len(osValues) > 0 {
+		opts.OS = append([]string(nil), osValues...)
+	}
+	if len(locales) > 0 {
+		opts.Locale = append([]string(nil), locales...)
+	}
+	if len(extraArgs) > 0 {
+		opts.Args = append(opts.Args, extraArgs...)
+	}
+	if *virtualDisplay != "" {
+		opts.VirtualDisplay = virtualDisplay
+	}
+	if *proxyServer != "" {
+		opts.Proxy = &camoufox.ProxyConfig{
+			Server:   *proxyServer,
+			Bypass:   *proxyBypass,
+			Username: *proxyUsername,
+			Password: *proxyPassword,
+		}
+	}
+	if err := mergePairs(&opts.Env, envValues); err != nil {
+		return err
+	}
+	if err := mergePairs(&opts.FirefoxUserPrefs, prefValues); err != nil {
+		return err
+	}
+	if err := mergePairs(&opts.Config, configValues); err != nil {
+		return err
+	}
+	applyBoolFlag(fs, "block-images", &opts.BlockImages, *blockImages)
+	applyBoolFlag(fs, "block-webrtc", &opts.BlockWebRTC, *blockWebRTC)
+	applyBoolFlag(fs, "block-webgl", &opts.BlockWebGL, *blockWebGL)
+	applyBoolFlag(fs, "enable-cache", &opts.EnableCache, *enableCache)
+	applyBoolFlag(fs, "main-world-eval", &opts.MainWorldEval, *mainWorldEval)
+	applyBoolFlag(fs, "i-know-what-im-doing", &opts.IKnowWhatImDoing, *iKnow)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	built, err := camoufox.BuildLaunchOptions(opts)
+	if err != nil {
+		return err
+	}
+	server, err := camoufox.LaunchServerHandleWithOptions(ctx, built, bidiOptions(*listen))
+	if err != nil {
+		return err
+	}
+	fmt.Println(server.Endpoint())
+	select {
+	case <-ctx.Done():
+		_ = server.Close()
+	case <-server.Done():
+	}
+	return nil
+}
+
 func listInstalled() error {
 	installed, err := pkgman.ListInstalled()
 	if err != nil {
@@ -179,5 +291,85 @@ func listInstalled() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: go-camoufox <fetch|info|install-driver|list|path|run|version>")
+	fmt.Println("usage: go-camoufox <fetch|info|install-driver|list|path|run|server|version>")
+}
+
+type repeatFlag []string
+
+func (r *repeatFlag) String() string { return strings.Join(*r, ",") }
+
+func (r *repeatFlag) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
+func loadLaunchOptionsJSON(value string) (*camoufox.LaunchOptions, error) {
+	data := []byte(value)
+	if info, err := os.Stat(value); err == nil && !info.IsDir() {
+		var readErr error
+		data, readErr = os.ReadFile(value)
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+	var opts camoufox.LaunchOptions
+	if err := json.Unmarshal(data, &opts); err != nil {
+		return nil, err
+	}
+	return &opts, nil
+}
+
+func mergePairs(dst *map[string]any, pairs []string) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+	if *dst == nil {
+		*dst = map[string]any{}
+	}
+	for _, pair := range pairs {
+		key, value, ok := strings.Cut(pair, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return fmt.Errorf("expected KEY=VALUE, got %q", pair)
+		}
+		(*dst)[key] = parseScalar(value)
+	}
+	return nil
+}
+
+func parseScalar(value string) any {
+	if parsed, err := strconv.ParseBool(value); err == nil {
+		return parsed
+	}
+	if parsed, err := strconv.Atoi(value); err == nil {
+		return parsed
+	}
+	if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		return parsed
+	}
+	return value
+}
+
+func applyBoolFlag(fs *flag.FlagSet, name string, target **bool, value bool) {
+	seen := false
+	fs.Visit(func(flag *flag.Flag) {
+		if flag.Name == name {
+			seen = true
+		}
+	})
+	if seen {
+		*target = &value
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func bidiOptions(listen string) bidi.Options {
+	return bidi.Options{ListenAddr: listen}
 }
