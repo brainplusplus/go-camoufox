@@ -71,7 +71,47 @@ def _install_shims() -> None:
         return root
 
     pkgman.load_yaml = load_yaml
+    pkgman.LOCAL_DATA = REF
     sys.modules["camoufox.pkgman"] = pkgman
+
+    warnings = types.ModuleType("camoufox._warnings")
+
+    class LeakWarning(RuntimeWarning):
+        @staticmethod
+        def warn(*args, **kwargs):
+            return None
+
+    warnings.LeakWarning = LeakWarning
+    sys.modules["camoufox._warnings"] = warnings
+
+    numpy = types.ModuleType("numpy")
+    numpy.unique = lambda values: list(dict.fromkeys(values))
+    numpy.ndarray = list
+    sys.modules["numpy"] = numpy
+
+    language_tags = types.ModuleType("language_tags")
+
+    class _Part:
+        def __init__(self, value):
+            self.data = {"record": {"Subtag": value}}
+
+    class _Tag:
+        def __init__(self, value):
+            parts = value.split("-")
+            self.language = _Part(parts[0])
+            self.region = _Part(parts[-1]) if len(parts) > 1 else None
+
+    class _Tags:
+        @staticmethod
+        def check(value):
+            return isinstance(value, str) and bool(value)
+
+        @staticmethod
+        def tag(value):
+            return _Tag(value)
+
+    language_tags.tags = _Tags()
+    sys.modules["language_tags"] = language_tags
 
     webgl = types.ModuleType("camoufox.webgl")
     webgl.sample_webgl = lambda *args, **kwargs: {
@@ -127,6 +167,22 @@ def main() -> None:
     elif command == "init_script":
         values = json.loads(sys.stdin.read())
         out = fp._build_init_script(values)
+    elif command == "context_fingerprint_from_preset":
+        random.seed(7)
+        data = json.loads(sys.stdin.read())
+        out = fp.generate_context_fingerprint(
+            preset=data["preset"],
+            ff_version=data.get("ff_version"),
+            webrtc_ip=data.get("webrtc_ip"),
+            timezone=data.get("timezone"),
+            locale=data.get("locale"),
+            config_overrides=data.get("config_overrides"),
+        )
+        out = {
+            "context_options": out["context_options"],
+            "config": out["config"],
+            "init_script": out["init_script"],
+        }
     else:
         raise SystemExit(f"unknown command: {command}")
 

@@ -57,12 +57,42 @@ type ProxyConfig struct {
 	Password string `json:"password,omitempty"`
 }
 
+type ContextOptions struct {
+	Preset      map[string]any
+	OS          []string
+	FFVersion   *int
+	WebRTCIP    string
+	Timezone    string
+	Locale      string
+	Config      map[string]any
+	Proxy       *ProxyConfig
+	Geolocation *GeolocationOption
+	Permissions []string
+	Playwright  *PlaywrightContextOptions
+}
+
+type GeolocationOption struct {
+	Latitude  float64
+	Longitude float64
+	Accuracy  *float64
+}
+
+type PlaywrightContextOptions struct {
+	ExtraHTTPHeaders  map[string]string
+	IgnoreHTTPSErrors *bool
+	JavaScriptEnabled *bool
+	Offline           *bool
+	StrictSelectors   *bool
+	NoViewport        *bool
+}
+
 type LaunchOptions struct {
 	Config            map[string]any
 	OS                []string
 	BlockImages       *bool
 	BlockWebRTC       *bool
 	BlockWebGL        *bool
+	AllowWebGL        *bool
 	DisableCOOP       *bool
 	WebGLConfig       *[2]string
 	GeoIP             *GeoIPOption

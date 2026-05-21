@@ -115,6 +115,106 @@ func TestPythonReferenceInitScriptParity(t *testing.T) {
 	}
 }
 
+func TestPythonReferenceContextFingerprintFromPresetParity(t *testing.T) {
+	preset := map[string]any{
+		"navigator": map[string]any{
+			"userAgent":           "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0",
+			"platform":            "Win32",
+			"hardwareConcurrency": float64(12),
+			"maxTouchPoints":      float64(0),
+		},
+		"screen": map[string]any{
+			"width":            float64(1920),
+			"height":           float64(1080),
+			"colorDepth":       float64(24),
+			"availWidth":       float64(1920),
+			"availHeight":      float64(1032),
+			"devicePixelRatio": float64(1.25),
+		},
+		"webgl": map[string]any{
+			"unmaskedVendor":   "Google Inc. (Intel)",
+			"unmaskedRenderer": "ANGLE (Intel, Intel(R) HD Graphics Direct3D11 vs_5_0 ps_5_0), or similar",
+		},
+	}
+	input, err := json.Marshal(map[string]any{
+		"preset":     preset,
+		"ff_version": "151",
+		"webrtc_ip":  "203.0.113.1",
+		"timezone":   "Asia/Jakarta",
+		"locale":     "id-ID",
+		"config_overrides": map[string]any{
+			"fonts:spacing_seed": float64(0),
+			"audio:seed":         float64(0),
+			"canvas:seed":        float64(0),
+			"fonts":              []any{"Arial", "Tahoma"},
+			"voices":             []any{"Microsoft David - English (United States)"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var py struct {
+		ContextOptions map[string]any `json:"context_options"`
+		Config         map[string]any `json:"config"`
+		InitScript     string         `json:"init_script"`
+	}
+	if err := json.Unmarshal(runPythonReference(t, "context_fingerprint_from_preset", input), &py); err != nil {
+		t.Fatal(err)
+	}
+	goOut, err := GenerateContextFingerprint(
+		preset,
+		[]string{"windows"},
+		"151",
+		"203.0.113.1",
+		"Asia/Jakarta",
+		"id-ID",
+		map[string]any{
+			"fonts:spacing_seed": float64(0),
+			"audio:seed":         float64(0),
+			"canvas:seed":        float64(0),
+			"fonts":              []any{"Arial", "Tahoma"},
+			"voices":             []any{"Microsoft David - English (United States)"},
+		},
+		&sequenceRNG{uints: []uint32{1, 2, 3}, floats: []float64{0}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{
+		"user_agent",
+		"viewport",
+		"device_scale_factor",
+		"timezone_id",
+		"locale",
+	} {
+		if !jsonEqual(goOut.ContextOptions[key], py.ContextOptions[key]) {
+			t.Fatalf("context option mismatch for %s: Go=%#v Python=%#v", key, goOut.ContextOptions[key], py.ContextOptions[key])
+		}
+	}
+	for _, key := range []string{
+		"navigator.userAgent",
+		"navigator.platform",
+		"navigator.hardwareConcurrency",
+		"navigator.oscpu",
+		"screen.width",
+		"screen.height",
+		"screen.colorDepth",
+		"screen.pixelDepth",
+		"webGl:vendor",
+		"webGl:renderer",
+		"timezone",
+		"navigator.language",
+		"fonts:spacing_seed",
+	} {
+		if !jsonEqual(goOut.Config[key], py.Config[key]) {
+			t.Fatalf("context config mismatch for %s: Go=%#v Python=%#v", key, goOut.Config[key], py.Config[key])
+		}
+	}
+	if goOut.InitScript != py.InitScript {
+		t.Fatalf("context init script mismatch:\nGo:\n%s\nPython:\n%s", goOut.InitScript, py.InitScript)
+	}
+}
+
 func runPythonReference(t *testing.T, command string, stdin []byte) []byte {
 	t.Helper()
 	python, err := exec.LookPath("python")

@@ -1,8 +1,9 @@
 module github.com/brainplusplus/go-camoufox
 
-go 1.24
+go 1.24.1
 
 require (
+	github.com/brainplusplus/go-browserforge v0.0.0-20260521000856-3e5872d07514
 	github.com/gorilla/websocket v1.5.3
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/playwright-community/playwright-go v0.5700.1

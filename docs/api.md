@@ -12,6 +12,31 @@ fingerprints, GeoIP, locales, addons, and virtual display state.
 `camoufox.New(ctx, opts)` and `camoufox.NewContext(ctx, existing, opts)` remain
 available for Phase 1-3 Playwright compatibility.
 
+For Python-style per-context fingerprinting on an already launched browser, use
+`browser.NewBrowserContext(ctx, opts)`:
+
+```go
+browser, err := camoufox.New(ctx, &camoufox.LaunchOptions{
+    OS: []string{"windows"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer browser.Close(ctx)
+
+fingerprinted, err := browser.NewBrowserContext(ctx, &camoufox.ContextOptions{
+    OS:       []string{"windows"},
+    Locale:   "en-US",
+    Timezone: "America/New_York",
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer fingerprinted.Context.Close()
+
+page, err := fingerprinted.Context.NewPage()
+```
+
 ## Native WebDriver BiDi Server
 
 ```go

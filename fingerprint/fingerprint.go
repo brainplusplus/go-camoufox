@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 
+	bffingerprints "github.com/brainplusplus/go-browserforge/fingerprints"
+	bfheaders "github.com/brainplusplus/go-browserforge/headers"
 	"github.com/brainplusplus/go-camoufox/internal/assets"
 	"gopkg.in/yaml.v3"
 )
@@ -35,6 +37,13 @@ type RNG interface {
 
 type BrowserForgeFingerprint struct {
 	Raw map[string]any
+}
+
+type ScreenConstraint struct {
+	MinWidth  int
+	MaxWidth  int
+	MinHeight int
+	MaxHeight int
 }
 
 type ContextFingerprint struct {
@@ -104,27 +113,228 @@ func GetRandomPreset(osValues []string, ffVersion any, rng RNG) (map[string]any,
 	return cloneMap(candidates[randIntn(rng, len(candidates))]), nil
 }
 
-func GenerateFingerprint(osValues []string, window *[2]int, ffVersion any, rng RNG) (*BrowserForgeFingerprint, error) {
-	preset, err := GetRandomPreset(osValues, ffVersion, rng)
+func getRandomPresetForScreen(osValues []string, screenConstraint *ScreenConstraint, ffVersion any, rng RNG) (map[string]any, error) {
+	presets, err := LoadPresets(ffVersion)
 	if err != nil {
 		return nil, err
 	}
-	if preset == nil {
-		return nil, fmt.Errorf("no fingerprint presets available")
-	}
-	raw := cloneMap(preset)
-	if window != nil {
-		screen := mapValue(raw, "screen")
-		screen["outerWidth"] = window[0]
-		screen["outerHeight"] = window[1]
-		if width, ok := intValue(screen["width"]); ok {
-			screen["screenX"] = (width - window[0]) / 2
-		}
-		if height, ok := intValue(screen["height"]); ok {
-			screen["screenY"] = (height - window[1]) / 2
+	keys := normalizeOSKeys(osValues)
+	candidates := make([]map[string]any, 0)
+	matches := make([]map[string]any, 0)
+	for _, key := range keys {
+		for _, preset := range presets[key] {
+			candidates = append(candidates, preset)
+			if screenMatchesConstraint(mapValue(preset, "screen"), screenConstraint) {
+				matches = append(matches, preset)
+			}
 		}
 	}
+	if len(matches) > 0 {
+		return cloneMap(matches[randIntn(rng, len(matches))]), nil
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	return cloneMap(candidates[randIntn(rng, len(candidates))]), nil
+}
+
+func GenerateFingerprint(osValues []string, screenConstraint *ScreenConstraint, window *[2]int, ffVersion any, rng RNG) (*BrowserForgeFingerprint, error) {
+	bfScreen := toBrowserForgeScreen(screenConstraint)
+	browser := bfheaders.Browser{Name: "firefox"}
+	fp, err := bffingerprints.Generate(bffingerprints.Options{
+		Screen: bfScreen,
+		Headers: bfheaders.Options{
+			Browsers:         []bfheaders.Browser{browser},
+			OperatingSystems: browserForgeOSValues(osValues),
+			Devices:          []string{"desktop"},
+			HTTPVersion:      "2",
+		},
+		RNG: rng,
+	})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := browserForgeRaw(fp)
+	if err != nil {
+		return nil, err
+	}
+	handleWindowSize(raw, window)
 	return &BrowserForgeFingerprint{Raw: raw}, nil
+}
+
+func handleWindowSize(raw map[string]any, window *[2]int) {
+	if window == nil {
+		return
+	}
+	screen := mapValue(raw, "screen")
+	if len(screen) == 0 {
+		return
+	}
+	outerWidth, outerHeight := window[0], window[1]
+	width, _ := intValue(screen["width"])
+	height, _ := intValue(screen["height"])
+	screenX, _ := intValue(screen["screenX"])
+	oldOuterWidth, _ := intValue(screen["outerWidth"])
+	oldOuterHeight, _ := intValue(screen["outerHeight"])
+	innerWidth, hasInnerWidth := intValue(screen["innerWidth"])
+	innerHeight, hasInnerHeight := intValue(screen["innerHeight"])
+
+	screen["screenX"] = screenX + (width-outerWidth)/2
+	screen["screenY"] = (height - outerHeight) / 2
+	if hasInnerWidth {
+		screen["innerWidth"] = max(outerWidth-oldOuterWidth+innerWidth, 0)
+	}
+	if hasInnerHeight {
+		screen["innerHeight"] = max(outerHeight-oldOuterHeight+innerHeight, 0)
+	}
+	screen["outerWidth"] = outerWidth
+	screen["outerHeight"] = outerHeight
+}
+
+func toBrowserForgeScreen(constraint *ScreenConstraint) *bffingerprints.Screen {
+	if constraint == nil {
+		return nil
+	}
+	return &bffingerprints.Screen{
+		MinWidth:  constraint.MinWidth,
+		MaxWidth:  constraint.MaxWidth,
+		MinHeight: constraint.MinHeight,
+		MaxHeight: constraint.MaxHeight,
+	}
+}
+
+func browserForgeOSValues(values []string) []string {
+	if len(values) == 0 {
+		return []string{"linux", "macos", "windows"}
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		switch value {
+		case "win", "windows":
+			out = append(out, "windows")
+		case "lin", "linux":
+			out = append(out, "linux")
+		case "mac", "macos":
+			out = append(out, "macos")
+		default:
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func browserForgeRaw(fp *bffingerprints.Fingerprint) (map[string]any, error) {
+	data, err := json.Marshal(fp)
+	if err != nil {
+		return nil, err
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func screenMatchesConstraint(screen map[string]any, constraint *ScreenConstraint) bool {
+	if constraint == nil {
+		return true
+	}
+	width, widthOK := intValue(screen["width"])
+	height, heightOK := intValue(screen["height"])
+	if !widthOK || !heightOK {
+		return false
+	}
+	return withinConstraint(width, constraint.MinWidth, constraint.MaxWidth) &&
+		withinConstraint(height, constraint.MinHeight, constraint.MaxHeight)
+}
+
+func withinConstraint(value, minValue, maxValue int) bool {
+	if minValue > 0 && value < minValue {
+		return false
+	}
+	if maxValue > 0 && value > maxValue {
+		return false
+	}
+	return true
+}
+
+func applyScreenConstraint(raw map[string]any, constraint *ScreenConstraint) {
+	if constraint == nil {
+		return
+	}
+	screen := mapValue(raw, "screen")
+	width, widthOK := intValue(screen["width"])
+	height, heightOK := intValue(screen["height"])
+	if widthOK {
+		width = clampDimension(width, constraint.MinWidth, constraint.MaxWidth)
+		screen["width"] = width
+		if availWidth, ok := intValue(screen["availWidth"]); !ok || availWidth > width {
+			screen["availWidth"] = width
+		}
+	}
+	if heightOK {
+		height = clampDimension(height, constraint.MinHeight, constraint.MaxHeight)
+		screen["height"] = height
+		if availHeight, ok := intValue(screen["availHeight"]); !ok || availHeight > height {
+			screen["availHeight"] = height
+		}
+	}
+}
+
+func clampDimension(value, minValue, maxValue int) int {
+	if minValue > 0 && value < minValue {
+		value = minValue
+	}
+	if maxValue > 0 && value > maxValue {
+		value = maxValue
+	}
+	return value
+}
+
+func applyWindowDefaults(raw map[string]any, window *[2]int) {
+	screen := mapValue(raw, "screen")
+	width, widthOK := intValue(screen["width"])
+	height, heightOK := intValue(screen["height"])
+	availWidth, availWidthOK := intValue(screen["availWidth"])
+	availHeight, availHeightOK := intValue(screen["availHeight"])
+	if !availWidthOK && widthOK {
+		availWidth = width
+		screen["availWidth"] = width
+	}
+	if !availHeightOK && heightOK {
+		availHeight = height
+		screen["availHeight"] = height
+	}
+
+	outerWidth, outerHeight := 0, 0
+	if window != nil {
+		outerWidth, outerHeight = window[0], window[1]
+	} else {
+		outerWidth, outerHeight = availWidth, availHeight
+		if outerWidth == 0 {
+			outerWidth = width
+		}
+		if outerHeight == 0 {
+			outerHeight = height
+		}
+	}
+	if outerWidth <= 0 || outerHeight <= 0 {
+		return
+	}
+	screen["outerWidth"] = outerWidth
+	screen["outerHeight"] = outerHeight
+	if _, ok := screen["innerWidth"]; !ok {
+		screen["innerWidth"] = max(outerWidth, 1)
+	}
+	if _, ok := screen["innerHeight"]; !ok {
+		screen["innerHeight"] = max(outerHeight-88, 600)
+	}
+	if widthOK {
+		screen["screenX"] = (width - outerWidth) / 2
+	}
+	if heightOK {
+		screen["screenY"] = (height - outerHeight) / 2
+	}
 }
 
 func FromBrowserForge(fp *BrowserForgeFingerprint, ffVersion any) (map[string]any, error) {
@@ -254,6 +464,11 @@ func GenerateContextFingerprint(preset map[string]any, osValues []string, ffVers
 	if width, wok := intValue(config["screen.width"]); wok {
 		if height, hok := intValue(config["screen.height"]); hok {
 			context["viewport"] = map[string]any{"width": width, "height": max(height-28, 600)}
+		}
+	}
+	if screen := mapValue(preset, "screen"); len(screen) > 0 {
+		if dpr, ok := numberValue(screen["devicePixelRatio"]); ok && dpr > 0 {
+			context["device_scale_factor"] = dpr
 		}
 	}
 	if tz, ok := stringValue(config["timezone"]); ok {

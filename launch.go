@@ -2,10 +2,12 @@ package camoufox
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -95,16 +97,27 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		return fail(errors.New("os must be set when using webgl_config"))
 	}
 
+	executablePath := opts.ExecutablePath
+	if executablePath == "" {
+		if opts.Browser != nil && *opts.Browser != "" {
+			executablePath, err = pkgman.FindInstalledLaunchPath(*opts.Browser)
+		} else {
+			executablePath, err = pkgman.LaunchPath("")
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
+
 	iKnow := opts.IKnowWhatImDoing != nil && *opts.IKnowWhatImDoing
 	if !iKnow {
 		warnings.WarnManualConfig(config)
 	}
 
-	ffVersion := defaultFirefoxMajor
 	if opts.FFVersion != nil {
-		ffVersion = *opts.FFVersion
 		warnings.Warn("ff_version", iKnow)
 	}
+	ffVersion := resolveFirefoxMajor(opts.FFVersion, executablePath)
 
 	addonList := append([]string(nil), opts.Addons...)
 	if err := addons.AddDefaultAddons(&addonList, opts.ExcludeAddons); err != nil {
@@ -126,6 +139,12 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 			return fail(errors.New("no custom fonts were passed, but custom_fonts_only is enabled"))
 		}
 		warnings.Warn("custom_fonts_only", false)
+	}
+
+	if opts.Fingerprint != nil && opts.Fingerprint.Screen != nil && opts.Screen == nil {
+		optsCopy := *opts
+		optsCopy.Screen = opts.Fingerprint.Screen
+		opts = &optsCopy
 	}
 
 	if err := applyFingerprintOptions(config, opts, ffVersion, iKnow); err != nil {
@@ -167,7 +186,7 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		warnings.Warn("disable_coop", iKnow)
 		firefoxPrefs["browser.tabs.remote.useCrossOriginOpenerPolicy"] = false
 	}
-	if boolValue(opts.BlockWebGL) {
+	if boolValue(opts.BlockWebGL) || opts.AllowWebGL != nil && !*opts.AllowWebGL {
 		warnings.Warn("block_webgl", iKnow)
 		firefoxPrefs["webgl.disabled"] = true
 	} else {
@@ -206,19 +225,12 @@ func BuildLaunchOptions(opts *LaunchOptions) (*BuiltLaunchOptions, error) {
 		return fail(err)
 	}
 	for key, value := range camouEnv {
-		env[key] = value
+		if _, exists := env[key]; !exists {
+			env[key] = value
+		}
 	}
-
-	executablePath := opts.ExecutablePath
-	if executablePath == "" {
-		if opts.Browser != nil && *opts.Browser != "" {
-			executablePath, err = pkgman.FindInstalledLaunchPath(*opts.Browser)
-		} else {
-			executablePath, err = pkgman.LaunchPath("")
-		}
-		if err != nil {
-			return fail(err)
-		}
+	if err := applyFontConfigEnv(env, executablePath, fingerprint.TargetOSFromConfig(config), runtime.GOOS); err != nil {
+		return fail(err)
 	}
 
 	return &BuiltLaunchOptions{
@@ -311,6 +323,73 @@ func CamouConfigEnv(config map[string]any, goos string) (map[string]string, erro
 	return out, nil
 }
 
+func applyFontConfigEnv(env map[string]string, executablePath, targetOS, goos string) error {
+	if goos != "linux" {
+		return nil
+	}
+	if _, exists := env["FONTCONFIG_FILE"]; exists {
+		return nil
+	}
+	fontconfigPath, ok := findFontConfig(executablePath, targetOS)
+	if !ok {
+		return fmt.Errorf("fonts.conf not found for target OS %q near %q", targetOS, executablePath)
+	}
+	runtimePath, err := runtimeFontConfig(fontconfigPath, executablePath)
+	if err != nil {
+		return err
+	}
+	env["FONTCONFIG_FILE"] = runtimePath
+	return nil
+}
+
+func findFontConfig(executablePath, targetOS string) (string, bool) {
+	if executablePath == "" {
+		return "", false
+	}
+	base := filepath.Dir(executablePath)
+	candidates := []string{
+		filepath.Join(base, "fontconfigs", targetOS, "fonts.conf"),
+		filepath.Join(base, "fontconfig", targetOS, "fonts.conf"),
+		filepath.Join(base, "fontconfigs", "fonts.conf"),
+		filepath.Join(base, "fontconfig", "fonts.conf"),
+		filepath.Join(base, "browser", "fontconfigs", targetOS, "fonts.conf"),
+		filepath.Join(base, "browser", "fontconfig", targetOS, "fonts.conf"),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+func runtimeFontConfig(fontsConfPath, executablePath string) (string, error) {
+	data, err := os.ReadFile(fontsConfPath)
+	if err != nil {
+		return "", err
+	}
+	fontsDir := filepath.Join(filepath.Dir(executablePath), "fonts")
+	content := strings.ReplaceAll(string(data), `<dir prefix="cwd">fonts</dir>`, `<dir>`+fontsDir+`</dir>`)
+	cacheDir, err := pkgman.CacheDir()
+	if err != nil {
+		return "", err
+	}
+	targetDir := filepath.Join(cacheDir, "fontconfig")
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte(content))
+	target := filepath.Join(targetDir, fmt.Sprintf("fonts-%x.conf", sum[:6]))
+	if _, err := os.Stat(target); os.IsNotExist(err) {
+		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 func checkValidOS(values []string) error {
 	for _, value := range values {
 		if _, ok := validFingerprintOS[value]; !ok {
@@ -362,7 +441,7 @@ func applyFingerprintOptions(config map[string]any, opts *LaunchOptions, ffVersi
 	}
 
 	if !usedPreset && opts.Fingerprint == nil {
-		fp, err := fingerprint.GenerateFingerprint(opts.OS, opts.Window, ffVersionStr, nil)
+		fp, err := fingerprint.GenerateFingerprint(opts.OS, toFingerprintScreenConstraint(opts.Screen), opts.Window, ffVersionStr, nil)
 		if err != nil {
 			return err
 		}
@@ -389,6 +468,64 @@ func applyFingerprintOptions(config map[string]any, opts *LaunchOptions, ffVersi
 	fingerprint.SetInto(config, "audio:seed", randomSeed())
 	fingerprint.SetInto(config, "canvas:seed", randomSeed())
 	return nil
+}
+
+func toFingerprintScreenConstraint(screen *ScreenConstraint) *fingerprint.ScreenConstraint {
+	if screen == nil {
+		return nil
+	}
+	return &fingerprint.ScreenConstraint{
+		MinWidth:  screen.MinWidth,
+		MaxWidth:  screen.MaxWidth,
+		MinHeight: screen.MinHeight,
+		MaxHeight: screen.MaxHeight,
+	}
+}
+
+func resolveFirefoxMajor(explicit *int, executablePath string) int {
+	if explicit != nil {
+		return *explicit
+	}
+	if major, ok := installedFirefoxMajor(executablePath); ok {
+		return major
+	}
+	return defaultFirefoxMajor
+}
+
+func installedFirefoxMajor(executablePath string) (int, bool) {
+	if executablePath == "" {
+		return 0, false
+	}
+	target, err := filepath.Abs(executablePath)
+	if err != nil {
+		return 0, false
+	}
+	target = filepath.Clean(target)
+	installed, err := pkgman.ListInstalled()
+	if err != nil {
+		return 0, false
+	}
+	for _, item := range installed {
+		launch, err := filepath.Abs(item.LaunchExe)
+		if err != nil {
+			continue
+		}
+		if !samePath(filepath.Clean(launch), target) {
+			continue
+		}
+		major, err := strconv.Atoi(strings.SplitN(item.Version.Version, ".", 2)[0])
+		if err == nil && major > 0 {
+			return major, true
+		}
+	}
+	return 0, false
+}
+
+func samePath(left, right string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(left, right)
+	}
+	return left == right
 }
 
 func randomRange(minInclusive, maxExclusive int) int {

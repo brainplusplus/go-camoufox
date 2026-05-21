@@ -25,6 +25,7 @@ Current release target: `0.1.0`.
 
 - Use the upstream Camoufox browser binary from [daijro/camoufox](https://github.com/daijro/camoufox).
 - Launch Camoufox from Go without Python in the main runtime path.
+- Generate default fingerprints through [go-browserforge](https://github.com/brainplusplus/go-browserforge), a Go port using the same BrowserForge/Apify datapoints model.
 - Expose a WebDriver BiDi endpoint that other languages and agents can attach to.
 - Keep a Playwright-compatible Go API alongside the native BiDi server path.
 
@@ -65,6 +66,8 @@ Python Camoufox:
 `go-camoufox`:
 
 - Reimplements the launcher/config pipeline in Go.
+- Uses `go-browserforge` for BrowserForge-style synthetic fingerprints and the
+  same Camoufox `browserforge.yml` mapping used by the Python reference.
 - Keeps a Playwright-compatible Go API for convenience.
 - Adds a native WebDriver BiDi server path so other languages can connect over
   WebSocket without Python in the main runtime path.
@@ -89,7 +92,8 @@ Pros of `go-camoufox`:
 
 Cons of `go-camoufox`:
 
-- Upstream Python Camoufox is still the reference, so parity work is ongoing.
+- Upstream Python Camoufox is still the reference, so new upstream changes need
+  to be mirrored deliberately.
 - Some ecosystem examples and assumptions still center on Python first.
 - Client-library behavior around BiDi can vary, especially outside raw BiDi
   flows.
@@ -118,6 +122,8 @@ is not yet a `1.0` parity claim.
 Implemented:
 
 - Camoufox launch option builder with embedded config/fingerprint assets.
+- BrowserForge-backed default fingerprint generation through
+  `github.com/brainplusplus/go-browserforge`.
 - Browser install/cache helpers.
 - Playwright compatibility launch API.
 - Native WebDriver BiDi server and CLI command.
@@ -279,4 +285,5 @@ With live browser smoke:
 - [CLI reference](docs/cli.md)
 - [Go API reference](docs/api.md)
 - [Docker](docs/docker.md)
+- [Parity audit](docs/parity-audit.md)
 - [Migration from Python](docs/migration.md)

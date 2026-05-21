@@ -3,6 +3,8 @@ package camoufox
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -94,8 +96,11 @@ func TestBuildLaunchOptionsRejectsInvalidOS(t *testing.T) {
 }
 
 func TestBuildLaunchOptionsGeneratesEmbeddedFingerprint(t *testing.T) {
+	window := [2]int{1200, 700}
 	built, err := BuildLaunchOptions(&LaunchOptions{
 		OS:             []string{"windows"},
+		Screen:         &ScreenConstraint{MaxWidth: 1920, MaxHeight: 1200},
+		Window:         &window,
 		ExecutablePath: "camoufox",
 		ExcludeAddons:  []DefaultAddon{AddonUBO},
 	})
@@ -106,6 +111,8 @@ func TestBuildLaunchOptionsGeneratesEmbeddedFingerprint(t *testing.T) {
 		"navigator.userAgent",
 		"navigator.platform",
 		"screen.width",
+		"window.outerWidth",
+		"window.outerHeight",
 		"webGl:vendor",
 		"webGl:renderer",
 		"fonts",
@@ -121,6 +128,12 @@ func TestBuildLaunchOptionsGeneratesEmbeddedFingerprint(t *testing.T) {
 	}
 	if built.FirefoxUserPrefs["webgl.force-enabled"] != true {
 		t.Fatalf("expected webgl prefs to be merged: %#v", built.FirefoxUserPrefs)
+	}
+	if built.Config["window.outerWidth"] != 1200 || built.Config["window.outerHeight"] != 700 {
+		t.Fatalf("expected explicit window dimensions in config: %#v", built.Config)
+	}
+	if width, ok := configInt(built.Config["screen.width"]); !ok || width > 1920 {
+		t.Fatalf("screen constraint was not applied: %#v", built.Config)
 	}
 }
 
@@ -163,6 +176,98 @@ func TestBuildLaunchOptionsPresetAndExplicitWebGL(t *testing.T) {
 	}
 	if built.Config["webGl:vendor"] != webgl[0] || built.Config["webGl:renderer"] != webgl[1] {
 		t.Fatalf("explicit webgl config not applied: %#v", built.Config)
+	}
+}
+
+func TestBuildLaunchOptionsAllowWebGLFalseAlias(t *testing.T) {
+	allowWebGL := false
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		OS:             []string{"windows"},
+		AllowWebGL:     &allowWebGL,
+		ExecutablePath: "camoufox",
+		ExcludeAddons:  []DefaultAddon{AddonUBO},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.FirefoxUserPrefs["webgl.disabled"] != true {
+		t.Fatalf("allow_webgl=false alias did not disable webgl: %#v", built.FirefoxUserPrefs)
+	}
+}
+
+func TestBuildLaunchOptionsUserEnvOverridesGeneratedConfigEnv(t *testing.T) {
+	built, err := BuildLaunchOptions(&LaunchOptions{
+		OS:             []string{"windows"},
+		ExecutablePath: "camoufox",
+		ExcludeAddons:  []DefaultAddon{AddonUBO},
+		Env:            map[string]any{"CAMOU_CONFIG_1": `{"manual":true}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.Env["CAMOU_CONFIG_1"] != `{"manual":true}` {
+		t.Fatalf("user env should win like Python launch_options: %#v", built.Env["CAMOU_CONFIG_1"])
+	}
+}
+
+func TestApplyFontConfigEnvLinux(t *testing.T) {
+	root := t.TempDir()
+	exe := filepath.Join(root, "camoufox-bin")
+	if err := os.WriteFile(exe, []byte(""), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	confDir := filepath.Join(root, "fontconfigs", "windows")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conf := filepath.Join(confDir, "fonts.conf")
+	if err := os.WriteFile(conf, []byte(`<fontconfig><dir prefix="cwd">fonts</dir></fontconfig>`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_CAMOUFOX_CACHE", filepath.Join(root, "cache"))
+	env := map[string]string{}
+	if err := applyFontConfigEnv(env, exe, "windows", "linux"); err != nil {
+		t.Fatal(err)
+	}
+	runtimeConf := env["FONTCONFIG_FILE"]
+	if runtimeConf == "" {
+		t.Fatal("FONTCONFIG_FILE was not set")
+	}
+	data, err := os.ReadFile(runtimeConf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), filepath.Join(root, "fonts")) {
+		t.Fatalf("font path was not rewritten: %s", data)
+	}
+}
+
+func TestPersistentContextOptionsCarryFingerprintContext(t *testing.T) {
+	built := &BuiltLaunchOptions{
+		ExecutablePath: "camoufox",
+		Config: map[string]any{
+			"screen.width":        1920,
+			"screen.height":       1080,
+			"navigator.userAgent": "Mozilla/5.0 Firefox/150.0",
+			"timezone":            "Asia/Jakarta",
+			"navigator.language":  "id-ID",
+		},
+	}
+	options := toPlaywrightPersistentOptions(built)
+	if options.Screen == nil || options.Screen.Width != 1920 || options.Screen.Height != 1080 {
+		t.Fatalf("screen options missing: %#v", options.Screen)
+	}
+	if options.Viewport == nil || options.Viewport.Width != 1920 || options.Viewport.Height != 1052 {
+		t.Fatalf("viewport options missing: %#v", options.Viewport)
+	}
+	if options.UserAgent == nil || *options.UserAgent != "Mozilla/5.0 Firefox/150.0" {
+		t.Fatalf("user agent option missing: %#v", options.UserAgent)
+	}
+	if options.TimezoneId == nil || *options.TimezoneId != "Asia/Jakarta" {
+		t.Fatalf("timezone option missing: %#v", options.TimezoneId)
+	}
+	if options.Locale == nil || *options.Locale != "id-ID" {
+		t.Fatalf("locale option missing: %#v", options.Locale)
 	}
 }
 

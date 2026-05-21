@@ -136,6 +136,45 @@ func TestFromPresetConvertsReferenceKeys(t *testing.T) {
 	}
 }
 
+func TestGenerateFingerprintHonorsScreenAndWindow(t *testing.T) {
+	fp, err := GenerateFingerprint(
+		[]string{"windows"},
+		&ScreenConstraint{MaxWidth: 1920, MaxHeight: 1200},
+		&[2]int{1200, 700},
+		"150",
+		&sequenceRNG{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := fp.Raw["screen"].(map[string]any)
+	if width, _ := intValue(screen["width"]); width > 1920 {
+		t.Fatalf("screen width was not constrained: %#v", screen)
+	}
+	if height, _ := intValue(screen["height"]); height > 1200 {
+		t.Fatalf("screen height was not constrained: %#v", screen)
+	}
+	if screen["outerWidth"] != 1200 || screen["outerHeight"] != 700 {
+		t.Fatalf("explicit window was not applied: %#v", screen)
+	}
+	if _, ok := screen["innerWidth"]; !ok {
+		t.Fatalf("expected innerWidth to be derived: %#v", screen)
+	}
+}
+
+func TestGenerateFingerprintDerivesHeadfulWindowDefaults(t *testing.T) {
+	fp, err := GenerateFingerprint([]string{"windows"}, nil, nil, "150", &sequenceRNG{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen := fp.Raw["screen"].(map[string]any)
+	outerWidth, widthOK := intValue(screen["outerWidth"])
+	outerHeight, heightOK := intValue(screen["outerHeight"])
+	if !widthOK || !heightOK || outerWidth <= 0 || outerHeight <= 0 {
+		t.Fatalf("expected BrowserForge-style window dimensions: %#v", screen)
+	}
+}
+
 func TestBuildInitScriptParityFields(t *testing.T) {
 	script := BuildInitScript(map[string]any{
 		"fontSpacingSeed":      uint32(1),

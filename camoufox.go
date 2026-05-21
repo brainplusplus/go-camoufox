@@ -2,9 +2,14 @@ package camoufox
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 
+	"github.com/brainplusplus/go-camoufox/fingerprint"
+	"github.com/brainplusplus/go-camoufox/geolocation"
 	"github.com/brainplusplus/go-camoufox/protocol/bidi"
 	playwright "github.com/playwright-community/playwright-go"
 )
@@ -14,6 +19,11 @@ type Browser struct {
 	Playwright *playwright.Playwright
 	Browser    playwright.Browser
 	Context    playwright.BrowserContext
+}
+
+type FingerprintedContext struct {
+	Context     playwright.BrowserContext
+	Fingerprint *fingerprint.ContextFingerprint
 }
 
 func New(ctx context.Context, opts *LaunchOptions) (*Browser, error) {
@@ -47,6 +57,56 @@ func NewBrowser(ctx context.Context, existing any, opts *LaunchOptions) (*Browse
 		browser.Playwright = pw
 	}
 	return browser, nil
+}
+
+func NewContextFromBrowser(ctx context.Context, browser playwright.Browser, opts *ContextOptions) (*FingerprintedContext, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if browser == nil {
+		return nil, errors.New("browser is required")
+	}
+	fp, contextOptions, err := buildContextOptions(ctx, opts, nil)
+	if err != nil {
+		return nil, err
+	}
+	context, err := browser.NewContext(contextOptions)
+	if err != nil {
+		return nil, err
+	}
+	if fp.InitScript != "" {
+		script := fp.InitScript
+		if err := context.AddInitScript(playwright.Script{Content: &script}); err != nil {
+			_ = context.Close()
+			return nil, err
+		}
+	}
+	return &FingerprintedContext{Context: context, Fingerprint: fp}, nil
+}
+
+func (b *Browser) NewBrowserContext(ctx context.Context, opts *ContextOptions) (*FingerprintedContext, error) {
+	if b == nil || b.Browser == nil {
+		return nil, errors.New("browser handle is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	fp, contextOptions, err := buildContextOptions(ctx, opts, b.Options)
+	if err != nil {
+		return nil, err
+	}
+	context, err := b.Browser.NewContext(contextOptions)
+	if err != nil {
+		return nil, err
+	}
+	if fp.InitScript != "" {
+		script := fp.InitScript
+		if err := context.AddInitScript(playwright.Script{Content: &script}); err != nil {
+			_ = context.Close()
+			return nil, err
+		}
+	}
+	return &FingerprintedContext{Context: context, Fingerprint: fp}, nil
 }
 
 func NewContext(ctx context.Context, existing any, opts *LaunchOptions) (*Browser, error) {
@@ -203,6 +263,177 @@ func InstallPlaywrightDriver(ctx context.Context) error {
 	return playwright.Install(&playwright.RunOptions{SkipInstallBrowsers: true})
 }
 
+func buildContextOptions(ctx context.Context, opts *ContextOptions, built *BuiltLaunchOptions) (*fingerprint.ContextFingerprint, playwright.BrowserNewContextOptions, error) {
+	if opts == nil {
+		opts = &ContextOptions{}
+	}
+	webrtcIP := opts.WebRTCIP
+	timezone := opts.Timezone
+	if opts.Proxy != nil && (webrtcIP == "" || timezone == "") {
+		proxyString, err := (geolocation.Proxy{
+			Server:   opts.Proxy.Server,
+			Username: opts.Proxy.Username,
+			Password: opts.Proxy.Password,
+			Bypass:   opts.Proxy.Bypass,
+		}).AsString()
+		if err != nil {
+			return nil, playwright.BrowserNewContextOptions{}, err
+		}
+		ip, err := publicIP(ctx, proxyString)
+		if err == nil {
+			if webrtcIP == "" {
+				webrtcIP = ip
+			}
+			if timezone == "" {
+				if geo, geoErr := getGeolocation(ctx, ip, ""); geoErr == nil {
+					timezone = geo.Timezone
+				}
+			}
+		}
+	}
+	ffVersion := defaultFirefoxMajor
+	if opts.FFVersion != nil {
+		ffVersion = *opts.FFVersion
+	} else if built != nil {
+		ffVersion = firefoxMajorFromConfig(built.Config, defaultFirefoxMajor)
+	}
+	fp, err := fingerprint.GenerateContextFingerprint(
+		opts.Preset,
+		opts.OS,
+		strconv.Itoa(ffVersion),
+		webrtcIP,
+		timezone,
+		opts.Locale,
+		opts.Config,
+		nil,
+	)
+	if err != nil {
+		return nil, playwright.BrowserNewContextOptions{}, err
+	}
+	contextOptions := browserNewContextOptionsFromFingerprint(fp)
+	mergeContextOptions(&contextOptions, opts)
+	return fp, contextOptions, nil
+}
+
+func browserNewContextOptionsFromFingerprint(fp *fingerprint.ContextFingerprint) playwright.BrowserNewContextOptions {
+	options := playwright.BrowserNewContextOptions{}
+	if fp == nil {
+		return options
+	}
+	if ua, ok := fp.ContextOptions["user_agent"].(string); ok && ua != "" {
+		options.UserAgent = &ua
+	}
+	if viewport, ok := fp.ContextOptions["viewport"].(map[string]any); ok {
+		if width, wok := configInt(viewport["width"]); wok {
+			if height, hok := configInt(viewport["height"]); hok {
+				options.Viewport = &playwright.Size{Width: width, Height: height}
+			}
+		}
+	}
+	if dpr, ok := numberOption(fp.ContextOptions["device_scale_factor"]); ok {
+		options.DeviceScaleFactor = &dpr
+	}
+	if timezone, ok := fp.ContextOptions["timezone_id"].(string); ok && timezone != "" {
+		options.TimezoneId = &timezone
+	}
+	if locale, ok := fp.ContextOptions["locale"].(string); ok && locale != "" {
+		options.Locale = &locale
+	}
+	if width, height, ok := configScreenSize(fp.Config); ok {
+		options.Screen = &playwright.Size{Width: width, Height: height}
+	}
+	return options
+}
+
+func mergeContextOptions(options *playwright.BrowserNewContextOptions, opts *ContextOptions) {
+	if opts == nil {
+		return
+	}
+	if opts.Proxy != nil {
+		options.Proxy = toPlaywrightProxy(opts.Proxy)
+	}
+	if opts.Geolocation != nil {
+		options.Geolocation = &playwright.Geolocation{
+			Latitude:  opts.Geolocation.Latitude,
+			Longitude: opts.Geolocation.Longitude,
+		}
+		if opts.Geolocation.Accuracy != nil {
+			options.Geolocation.Accuracy = opts.Geolocation.Accuracy
+		}
+		options.Permissions = appendUnique(options.Permissions, "geolocation")
+	}
+	options.Permissions = appendUnique(options.Permissions, opts.Permissions...)
+	if opts.Playwright == nil {
+		return
+	}
+	if opts.Playwright.ExtraHTTPHeaders != nil {
+		options.ExtraHttpHeaders = opts.Playwright.ExtraHTTPHeaders
+	}
+	if opts.Playwright.IgnoreHTTPSErrors != nil {
+		options.IgnoreHttpsErrors = opts.Playwright.IgnoreHTTPSErrors
+	}
+	if opts.Playwright.JavaScriptEnabled != nil {
+		options.JavaScriptEnabled = opts.Playwright.JavaScriptEnabled
+	}
+	if opts.Playwright.Offline != nil {
+		options.Offline = opts.Playwright.Offline
+	}
+	if opts.Playwright.StrictSelectors != nil {
+		options.StrictSelectors = opts.Playwright.StrictSelectors
+	}
+	if opts.Playwright.NoViewport != nil {
+		options.NoViewport = opts.Playwright.NoViewport
+	}
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	seen := make(map[string]struct{}, len(values)+len(additions))
+	out := make([]string, 0, len(values)+len(additions))
+	for _, value := range append(values, additions...) {
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func numberOption(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case float64:
+		return typed, true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func firefoxMajorFromConfig(config map[string]any, fallback int) int {
+	ua, _ := config["navigator.userAgent"].(string)
+	if ua == "" {
+		return fallback
+	}
+	_, after, ok := strings.Cut(ua, "Firefox/")
+	if !ok {
+		return fallback
+	}
+	major, err := strconv.Atoi(strings.SplitN(after, ".", 2)[0])
+	if err != nil || major <= 0 {
+		return fallback
+	}
+	return major
+}
+
 func toPlaywrightLaunchOptions(built *BuiltLaunchOptions) playwright.BrowserTypeLaunchOptions {
 	options := playwright.BrowserTypeLaunchOptions{
 		Args:             built.Args,
@@ -225,10 +456,53 @@ func toPlaywrightPersistentOptions(built *BuiltLaunchOptions) playwright.Browser
 		FirefoxUserPrefs: built.FirefoxUserPrefs,
 		Headless:         &built.Headless,
 	}
+	if width, height, ok := configScreenSize(built.Config); ok {
+		options.Screen = &playwright.Size{Width: width, Height: height}
+		options.Viewport = &playwright.Size{Width: width, Height: max(height-28, 600)}
+	}
+	if ua, ok := built.Config["navigator.userAgent"].(string); ok && ua != "" {
+		options.UserAgent = &ua
+	}
+	if timezone, ok := built.Config["timezone"].(string); ok && timezone != "" {
+		options.TimezoneId = &timezone
+	}
+	if language, ok := built.Config["navigator.language"].(string); ok && language != "" {
+		options.Locale = &language
+	}
 	if built.Proxy != nil {
 		options.Proxy = toPlaywrightProxy(built.Proxy)
 	}
 	return options
+}
+
+func configScreenSize(config map[string]any) (int, int, bool) {
+	width, widthOK := configInt(config["screen.width"])
+	height, heightOK := configInt(config["screen.height"])
+	if !widthOK || !heightOK || width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func configInt(value any) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		i, err := v.Int64()
+		if err == nil {
+			return int(i), true
+		}
+		f, err := v.Float64()
+		if err == nil {
+			return int(f), true
+		}
+	}
+	return 0, false
 }
 
 func toPlaywrightProxy(proxy *ProxyConfig) *playwright.Proxy {

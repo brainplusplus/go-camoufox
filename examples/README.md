@@ -44,6 +44,8 @@ $env:CAMOUFOX_BIDI_ENDPOINT = "ws://127.0.0.1:50123/session"
 - `reference_ports/creepjs_simple_playwright`: Go equivalent of `example_simple.py`.
 - `reference_ports/httpbin_concurrent_playwright`: Go equivalent of `async_example.py`.
 - `reference_ports/creepjs_bidi`: Phase 4 native BiDi version of the CreepJS example.
+- `reference_ports/test_google_playwright`: Playwright-style Google smoke example close to the Python sync API sample.
+- `reference_ports/test_google_python_reference.py`: upstream Python Camoufox version of the Google smoke example for side-by-side comparison.
 
 Raw BiDi examples exercise the supported v1.0 subset directly:
 
