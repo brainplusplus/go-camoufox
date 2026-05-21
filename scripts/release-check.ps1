@@ -3,7 +3,7 @@ param(
     [switch]$Live,
     [string]$Executable = $env:GO_CAMOUFOX_EXECUTABLE,
     [string]$DockerTag = "go-camoufox:local",
-    [string]$Version = "0.1.0"
+    [string]$Version = "0.2.0"
 )
 
 $ErrorActionPreference = "Stop"

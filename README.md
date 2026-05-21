@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/brainplusplus/go-camoufox/releases/tag/v0.1.0">v0.1.0</a>
+  <a href="https://github.com/brainplusplus/go-camoufox/releases/tag/v0.2.0">v0.2.0</a>
   &middot;
   <a href="https://github.com/daijro/camoufox">Upstream Camoufox</a>
   &middot;
@@ -19,7 +19,7 @@
 `go-camoufox` ports the Python Camoufox launch/config pipeline into Go and adds
 a native WebDriver BiDi server path for multi-language browser automation.
 
-Current release target: `0.1.0`.
+Current release target: `0.2.0`.
 
 ## At A Glance
 
