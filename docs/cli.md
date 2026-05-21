@@ -5,9 +5,13 @@ Phase 4 server path native to Go.
 
 ## Commands
 
-- `go-camoufox fetch [--version VERSION] [--replace]`
+- `go-camoufox sync`
+- `go-camoufox set [repo/stable|repo/prerelease|repo/channel/version]`
+- `go-camoufox active`
+- `go-camoufox fetch [VERSION] [--version VERSION] [--replace]`
 - `go-camoufox fetch --list`
-- `go-camoufox list`
+- `go-camoufox list [installed|all] [--path]`
+- `go-camoufox remove [VERSION] --yes`
 - `go-camoufox path`
 - `go-camoufox info`
 - `go-camoufox version`
@@ -44,3 +48,21 @@ Flexible parity flags:
 The server currently supports the WebDriver BiDi commands implemented by the
 bundled Camoufox/Firefox Remote Agent. The v1.0 smoke scope is session,
 browsing context, script, and log/event flows.
+
+## Multiversion
+
+The Go CLI mirrors the important non-interactive Python multiversion workflows:
+
+```bash
+go-camoufox sync
+go-camoufox set official/prerelease
+go-camoufox fetch
+go-camoufox active
+go-camoufox list installed --path
+go-camoufox list all
+go-camoufox remove official/prerelease/135.0.1-beta.24 --yes
+```
+
+`set` accepts channel specs such as `official/stable` and pinned specs such as
+`official/prerelease/135.0.1-beta.24`. `fetch` follows the active channel or
+pinned version when no explicit version is passed.

@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/brainplusplus/go-camoufox/releases/tag/v0.2.0">v0.2.0</a>
+  <a href="https://github.com/brainplusplus/go-camoufox/releases/tag/v0.2.1">v0.2.1</a>
   &middot;
   <a href="https://github.com/daijro/camoufox">Upstream Camoufox</a>
   &middot;
@@ -19,7 +19,7 @@
 `go-camoufox` ports the Python Camoufox launch/config pipeline into Go and adds
 a native WebDriver BiDi server path for multi-language browser automation.
 
-Current release target: `0.2.0`.
+Current release target: `0.2.1`.
 
 ## At A Glance
 
@@ -125,6 +125,8 @@ Implemented:
 - BrowserForge-backed default fingerprint generation through
   `github.com/brainplusplus/go-browserforge`.
 - Browser install/cache helpers.
+- Multiversion CLI workflows for `sync`, `set`, `active`, `fetch`, `list all`,
+  and `remove`.
 - Playwright compatibility launch API.
 - Native WebDriver BiDi server and CLI command.
 - Browser pool, GeoIP/locale helpers, virtual display support, addon helpers.

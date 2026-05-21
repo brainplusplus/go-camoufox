@@ -21,7 +21,10 @@ func TestPlaywrightLaunchOptionMapping(t *testing.T) {
 			Password: "p",
 		},
 	}
-	options := toPlaywrightLaunchOptions(built)
+	options, err := toPlaywrightLaunchOptions(built)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if options.ExecutablePath == nil || *options.ExecutablePath != built.ExecutablePath {
 		t.Fatal("executable path was not mapped")
 	}
@@ -36,6 +39,44 @@ func TestPlaywrightLaunchOptionMapping(t *testing.T) {
 	}
 	if options.FirefoxUserPrefs["media.peerconnection.enabled"] != false {
 		t.Fatal("firefox prefs were not mapped")
+	}
+}
+
+func TestPlaywrightLaunchExtraOptions(t *testing.T) {
+	built := &BuiltLaunchOptions{
+		ExecutablePath: "camoufox",
+		Extra: map[string]any{
+			"downloads_path": "downloads",
+			"slow_mo":        25,
+			"timeout":        3000,
+			"tracesDir":      "traces",
+		},
+	}
+	options, err := toPlaywrightLaunchOptions(built)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.DownloadsPath == nil || *options.DownloadsPath != "downloads" {
+		t.Fatalf("downloadsPath extra not forwarded: %#v", options.DownloadsPath)
+	}
+	if options.SlowMo == nil || *options.SlowMo != 25 {
+		t.Fatalf("slowMo extra not forwarded: %#v", options.SlowMo)
+	}
+	if options.Timeout == nil || *options.Timeout != 3000 {
+		t.Fatalf("timeout extra not forwarded: %#v", options.Timeout)
+	}
+	if options.TracesDir == nil || *options.TracesDir != "traces" {
+		t.Fatalf("tracesDir extra not forwarded: %#v", options.TracesDir)
+	}
+}
+
+func TestPlaywrightLaunchExtraRejectsManagedOption(t *testing.T) {
+	_, err := toPlaywrightLaunchOptions(&BuiltLaunchOptions{
+		ExecutablePath: "camoufox",
+		Extra:          map[string]any{"headless": true},
+	})
+	if err == nil {
+		t.Fatal("expected managed extra option to be rejected")
 	}
 }
 

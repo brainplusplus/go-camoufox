@@ -9,6 +9,7 @@ under `references/camoufox`.
 | --- | --- | --- |
 | Launch option shape | Mostly matched | Go exposes the main Python `launch_options()` inputs as typed `LaunchOptions`, including the `allow_webgl` compatibility alias. |
 | Browser executable resolution | Matched | Go resolves installed browser versions and explicit executable paths. |
+| Multiversion CLI | Matched for non-interactive workflows | Go supports `sync`, `set`, `active`, `fetch`, `list installed`, `list all`, and `remove` with config, pinned versions, active version, and repo cache metadata. |
 | Firefox version default | Matched for installed Go cache | Go now derives the default Firefox major from the installed browser metadata when possible, matching Python's installed-version behavior more closely. Fallback remains `150`. |
 | Fingerprint presets | Matched | Preset loading, v150 preset selection, conversion, fonts, voices, and seed fields are covered by parity tests. |
 | Default synthetic fingerprint | Matched for Camoufox-used fields | Go now uses `github.com/brainplusplus/go-browserforge`, which embeds the same Apify BrowserForge network data and generates Firefox BrowserForge fingerprints before applying Camoufox's `browserforge.yml` mapping. |
@@ -22,6 +23,7 @@ under `references/camoufox`.
 | Linux fontconfig env | Matched | On Linux, Go now sets `FONTCONFIG_FILE` from bundled Camoufox fontconfig when available, with user env overrides preserved. |
 | Persistent context | Improved | Go passes generated screen, viewport, user agent, timezone, and locale into Playwright persistent context options. |
 | Per-context fingerprinting | Mostly matched | Go exposes `Browser.NewBrowserContext` / `NewContextFromBrowser`, applies generated context options, and injects the init script like Python `NewContext(browser, ...)`. |
+| Extra Playwright launch options | Matched behaviorally | Python `**launch_options` maps to Go `LaunchOptions.Extra` with validation and typed-field protection. |
 | Native BiDi server | Go-specific | This is Phase 4 functionality and not a direct upstream Python API. |
 
 ## Known Remaining Gaps
@@ -32,9 +34,9 @@ under `references/camoufox`.
 - BrowserForge screen constraints are matched to upstream behavior: if a
   non-strict constraint cannot be satisfied by the model, BrowserForge relaxes
   it instead of clamping to a synthetic impossible screen size.
-- Python accepts arbitrary extra Playwright launch options through
-  `**launch_options`. Go stores `Extra`, but only forwards the typed options it
-  explicitly supports.
+- Python's interactive CLI selectors are intentionally represented as
+  non-interactive Go commands. This keeps parity for automation and scripting
+  without adding a prompt UI dependency.
 - Python's full async API has no direct Go equivalent. Go users rely on Go
   goroutines plus Playwright-Go or native BiDi instead.
 

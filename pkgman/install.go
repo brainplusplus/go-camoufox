@@ -68,6 +68,11 @@ func LaunchFile(goos string) (string, error) {
 
 func LaunchPath(browserPath string) (string, error) {
 	if browserPath == "" {
+		if config, err := LoadConfig(); err == nil && config.ActiveVersion != "" {
+			if item, findErr := FindInstalled(config.ActiveVersion); findErr == nil {
+				return item.LaunchExe, nil
+			}
+		}
 		installed, err := ListInstalled()
 		if err != nil {
 			return "", err
@@ -191,7 +196,21 @@ func readInstalled(path string) (InstalledVersion, bool) {
 		Repo:      metadata.RepoName,
 		Channel:   metadata.Build,
 		LaunchExe: launch,
+		IsActive:  isActiveInstalled(path, metadata),
 	}, true
+}
+
+func isActiveInstalled(path string, metadata VersionMetadata) bool {
+	config, err := LoadConfig()
+	if err != nil {
+		return false
+	}
+	item := InstalledVersion{
+		Path:    path,
+		Version: Version{Build: metadata.Build, Version: metadata.Version},
+		Repo:    metadata.RepoName,
+	}
+	return config.ActiveVersion != "" && config.ActiveVersion == RelativeInstalledPath(item)
 }
 
 func ReadVersionMetadata(path string) (VersionMetadata, error) {

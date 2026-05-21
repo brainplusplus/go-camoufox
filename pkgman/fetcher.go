@@ -175,6 +175,14 @@ func ListAvailableVersions(ctx context.Context, opts InstallOptions) ([]Availabl
 }
 
 func Install(ctx context.Context, opts InstallOptions) (*InstalledVersion, error) {
+	versionSpec := opts.VersionSpec
+	channelType := ""
+	if versionSpec == "" {
+		if spec, channel, ok := activeFetchSpecifier(); ok {
+			versionSpec = spec
+			channelType = channel
+		}
+	}
 	versions, err := ListAvailableVersions(ctx, InstallOptions{
 		Repo:              opts.Repo,
 		Client:            opts.Client,
@@ -183,7 +191,7 @@ func Install(ctx context.Context, opts InstallOptions) (*InstalledVersion, error
 	if err != nil {
 		return nil, err
 	}
-	selected, err := selectVersion(versions, opts.VersionSpec)
+	selected, err := selectVersionForChannel(versions, versionSpec, channelType)
 	if err != nil {
 		return nil, err
 	}
@@ -215,13 +223,15 @@ func Install(ctx context.Context, opts InstallOptions) (*InstalledVersion, error
 		if err := VerifyLaunchPath(launch); err != nil {
 			return nil, err
 		}
-		return &InstalledVersion{
+		installed := &InstalledVersion{
 			Path:      installDir,
 			Version:   selected.Version,
 			Repo:      selected.RepoName,
 			Channel:   selected.Version.Build,
 			LaunchExe: launch,
-		}, nil
+		}
+		_ = activateInstalledAfterFetch(installed)
+		return installed, nil
 	}
 
 	tmp, err := os.CreateTemp("", "go-camoufox-*.zip")
@@ -259,13 +269,52 @@ func Install(ctx context.Context, opts InstallOptions) (*InstalledVersion, error
 	if err := VerifyLaunchPath(launch); err != nil {
 		return nil, err
 	}
-	return &InstalledVersion{
+	installed := &InstalledVersion{
 		Path:      installDir,
 		Version:   selected.Version,
 		Repo:      selected.RepoName,
 		Channel:   selected.Version.Build,
 		LaunchExe: launch,
-	}, nil
+	}
+	_ = activateInstalledAfterFetch(installed)
+	return installed, nil
+}
+
+func activeFetchSpecifier() (string, string, bool) {
+	config, err := LoadConfig()
+	if err != nil {
+		return "", "", false
+	}
+	if config.Pinned != "" {
+		return config.Pinned, "", true
+	}
+	_, channel, ok := splitChannel(config.Channel)
+	if !ok {
+		return "", "", false
+	}
+	return "", channel, true
+}
+
+func activateInstalledAfterFetch(installed *InstalledVersion) error {
+	config, err := LoadConfig()
+	if err != nil {
+		return err
+	}
+	if config.Channel == "" {
+		config.Channel = defaultChannel
+	}
+	if config.Pinned != "" && config.Pinned != installed.Version.FullString() {
+		return nil
+	}
+	repo, channel, ok := splitChannel(config.Channel)
+	if ok && !strings.EqualFold(repo, installed.Repo) {
+		return nil
+	}
+	if ok && channel == "stable" && strings.Contains(installed.Version.Build, "beta") {
+		return nil
+	}
+	config.ActiveVersion = RelativeInstalledPath(*installed)
+	return SaveConfig(config)
 }
 
 func getReleases(ctx context.Context, client HTTPDoer, githubRepo string) ([]Release, error) {
@@ -372,12 +421,25 @@ func writeZipFile(path string, src io.Reader, mode os.FileMode) error {
 }
 
 func selectVersion(versions []AvailableVersion, spec string) (AvailableVersion, error) {
+	return selectVersionForChannel(versions, spec, "")
+}
+
+func selectVersionForChannel(versions []AvailableVersion, spec, channel string) (AvailableVersion, error) {
 	if len(versions) == 0 {
 		return AvailableVersion{}, fmt.Errorf("no versions available")
 	}
 	spec = strings.TrimPrefix(strings.TrimSpace(spec), "v")
 	if spec == "" {
-		return versions[0], nil
+		for _, version := range versions {
+			if channel == "stable" && version.IsPrerelease {
+				continue
+			}
+			if channel == "prerelease" && !version.IsPrerelease {
+				continue
+			}
+			return version, nil
+		}
+		return AvailableVersion{}, fmt.Errorf("no versions available for channel %q", channel)
 	}
 	for _, version := range versions {
 		if version.Version.FullString() == spec || version.Version.Build == spec {

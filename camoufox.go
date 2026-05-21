@@ -42,7 +42,11 @@ func NewBrowser(ctx context.Context, existing any, opts *LaunchOptions) (*Browse
 	if err != nil {
 		return nil, err
 	}
-	launched, err := pw.Firefox.Launch(toPlaywrightLaunchOptions(built))
+	launchOptions, err := toPlaywrightLaunchOptions(built)
+	if err != nil {
+		return nil, err
+	}
+	launched, err := pw.Firefox.Launch(launchOptions)
 	if err != nil {
 		if built.VirtualDisplay != nil {
 			_ = built.VirtualDisplay.Close()
@@ -121,7 +125,11 @@ func NewContext(ctx context.Context, existing any, opts *LaunchOptions) (*Browse
 	if err != nil {
 		return nil, err
 	}
-	context, err := pw.Firefox.LaunchPersistentContext("", toPlaywrightPersistentOptions(built))
+	persistentOptions, err := toPlaywrightPersistentOptions(built)
+	if err != nil {
+		return nil, err
+	}
+	context, err := pw.Firefox.LaunchPersistentContext("", persistentOptions)
 	if err != nil {
 		if built.VirtualDisplay != nil {
 			_ = built.VirtualDisplay.Close()
@@ -434,7 +442,7 @@ func firefoxMajorFromConfig(config map[string]any, fallback int) int {
 	return major
 }
 
-func toPlaywrightLaunchOptions(built *BuiltLaunchOptions) playwright.BrowserTypeLaunchOptions {
+func toPlaywrightLaunchOptions(built *BuiltLaunchOptions) (playwright.BrowserTypeLaunchOptions, error) {
 	options := playwright.BrowserTypeLaunchOptions{
 		Args:             built.Args,
 		Env:              built.Env,
@@ -445,10 +453,13 @@ func toPlaywrightLaunchOptions(built *BuiltLaunchOptions) playwright.BrowserType
 	if built.Proxy != nil {
 		options.Proxy = toPlaywrightProxy(built.Proxy)
 	}
-	return options
+	if err := applyLaunchExtra(&options, built.Extra); err != nil {
+		return playwright.BrowserTypeLaunchOptions{}, err
+	}
+	return options, nil
 }
 
-func toPlaywrightPersistentOptions(built *BuiltLaunchOptions) playwright.BrowserTypeLaunchPersistentContextOptions {
+func toPlaywrightPersistentOptions(built *BuiltLaunchOptions) (playwright.BrowserTypeLaunchPersistentContextOptions, error) {
 	options := playwright.BrowserTypeLaunchPersistentContextOptions{
 		Args:             built.Args,
 		Env:              built.Env,
@@ -472,7 +483,10 @@ func toPlaywrightPersistentOptions(built *BuiltLaunchOptions) playwright.Browser
 	if built.Proxy != nil {
 		options.Proxy = toPlaywrightProxy(built.Proxy)
 	}
-	return options
+	if err := applyPersistentExtra(&options, built.Extra); err != nil {
+		return playwright.BrowserTypeLaunchPersistentContextOptions{}, err
+	}
+	return options, nil
 }
 
 func configScreenSize(config map[string]any) (int, int, bool) {

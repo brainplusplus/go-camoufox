@@ -253,7 +253,10 @@ func TestPersistentContextOptionsCarryFingerprintContext(t *testing.T) {
 			"navigator.language":  "id-ID",
 		},
 	}
-	options := toPlaywrightPersistentOptions(built)
+	options, err := toPlaywrightPersistentOptions(built)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if options.Screen == nil || options.Screen.Width != 1920 || options.Screen.Height != 1080 {
 		t.Fatalf("screen options missing: %#v", options.Screen)
 	}

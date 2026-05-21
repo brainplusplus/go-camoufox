@@ -18,7 +18,7 @@ import (
 	"github.com/brainplusplus/go-camoufox/protocol/bidi"
 )
 
-var version = "0.2.0"
+var version = "0.2.1"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -51,7 +51,15 @@ func run(args []string) error {
 		fmt.Printf("go-camoufox %s\ncache: %s\n", version, dir)
 		return nil
 	case "list":
-		return listInstalled()
+		return listCmd(args[1:])
+	case "active":
+		return active()
+	case "set":
+		return setVersion(args[1:])
+	case "sync":
+		return syncRepos()
+	case "remove":
+		return remove(args[1:])
 	case "fetch":
 		return fetch(args[1:])
 	case "run":
@@ -110,6 +118,105 @@ func fetch(args []string) error {
 		fmt.Fprintf(os.Stderr, "warning: failed to install default addons: %v\n", err)
 	}
 	fmt.Printf("installed v%s at %s\n", installed.Version.FullString(), installed.Path)
+	return nil
+}
+
+func syncRepos() error {
+	cache, err := pkgman.SyncRepoCache(context.Background(), pkgman.InstallOptions{IncludePrerelease: true})
+	if err != nil {
+		return err
+	}
+	total := 0
+	for _, repo := range cache.Repos {
+		total += len(repo.Versions)
+	}
+	fmt.Printf("synced %d versions from %d repos\n", total, len(cache.Repos))
+	return nil
+}
+
+func setVersion(args []string) error {
+	fs := flag.NewFlagSet("set", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() == 0 {
+		display, fetched, err := pkgman.ActiveDisplay()
+		if err != nil {
+			return err
+		}
+		if fetched {
+			fmt.Println(display)
+		} else {
+			fmt.Printf("%s (not fetched)\n", display)
+		}
+		return nil
+	}
+	spec := fs.Arg(0)
+	parts := strings.Split(spec, "/")
+	switch len(parts) {
+	case 2:
+		config, err := pkgman.SetChannel(spec)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("channel: %s\n", config.Channel)
+		if config.ActiveVersion == "" {
+			fmt.Println("run 'go-camoufox fetch' to install latest")
+		}
+	case 3:
+		config, err := pkgman.SetPinned(spec)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("pinned: %s/%s\n", config.Channel, config.Pinned)
+		if config.ActiveVersion == "" {
+			fmt.Println("run 'go-camoufox fetch' to install")
+		}
+	default:
+		if item, err := pkgman.SetActive(spec); err == nil {
+			fmt.Printf("active: %s\n", pkgman.InstalledChannelPath(*item))
+			return nil
+		}
+		return fmt.Errorf("expected repo/channel, repo/channel/version, or installed version specifier")
+	}
+	return nil
+}
+
+func active() error {
+	display, fetched, err := pkgman.ActiveDisplay()
+	if err != nil {
+		return err
+	}
+	if fetched {
+		fmt.Println(display)
+	} else {
+		fmt.Printf("%s (not fetched)\n", display)
+	}
+	return nil
+}
+
+func remove(args []string) error {
+	fs := flag.NewFlagSet("remove", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "skip confirmation prompts")
+	fs.BoolVar(yes, "y", false, "skip confirmation prompts")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*yes {
+		return fmt.Errorf("remove requires --yes in non-interactive Go CLI")
+	}
+	if fs.NArg() == 0 {
+		if err := pkgman.RemoveAll(); err != nil {
+			return err
+		}
+		fmt.Println("removed browser cache")
+		return nil
+	}
+	item, err := pkgman.RemoveInstalled(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed %s\n", pkgman.InstalledChannelPath(*item))
 	return nil
 }
 
@@ -271,7 +378,26 @@ func runServer(args []string) error {
 	return nil
 }
 
-func listInstalled() error {
+func listCmd(args []string) error {
+	fs := flag.NewFlagSet("list", flag.ContinueOnError)
+	showPaths := fs.Bool("path", false, "show full paths")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	mode := "installed"
+	if fs.NArg() > 0 {
+		mode = fs.Arg(0)
+	}
+	if mode == "all" {
+		return listAll(*showPaths)
+	}
+	if mode != "installed" {
+		return fmt.Errorf("list mode must be installed or all")
+	}
+	return listInstalled(*showPaths)
+}
+
+func listInstalled(showPaths bool) error {
 	installed, err := pkgman.ListInstalled()
 	if err != nil {
 		return err
@@ -285,13 +411,58 @@ func listInstalled() error {
 		if repo == "" {
 			repo = "unknown"
 		}
-		fmt.Printf("%s %s %s\n", repo, item.Version.FullString(), item.Path)
+		active := ""
+		if item.IsActive {
+			active = " (active)"
+		}
+		if showPaths {
+			fmt.Printf("%s/%s %s%s %s\n", strings.ToLower(repo), item.Channel, item.Version.FullString(), active, item.Path)
+		} else {
+			fmt.Printf("%s %s%s\n", strings.ToLower(repo), item.Version.FullString(), active)
+		}
+	}
+	return nil
+}
+
+func listAll(showPaths bool) error {
+	cache, err := pkgman.LoadRepoCache()
+	if err != nil {
+		return err
+	}
+	if len(cache.Repos) == 0 {
+		return fmt.Errorf("no repo cache found; run go-camoufox sync first")
+	}
+	installed, _ := pkgman.ListInstalled()
+	installedByBuild := map[string]pkgman.InstalledVersion{}
+	for _, item := range installed {
+		installedByBuild[item.Version.Build] = item
+	}
+	for _, repo := range cache.Repos {
+		fmt.Printf("%s/\n", strings.ToLower(repo.Name))
+		for _, version := range repo.Versions {
+			full := version.Version + "-" + version.Build
+			suffix := " (stable)"
+			if version.IsPrerelease {
+				suffix = " (prerelease)"
+			}
+			if inst, ok := installedByBuild[version.Build]; ok {
+				if inst.IsActive {
+					suffix += " (installed, active)"
+				} else {
+					suffix += " (installed)"
+				}
+				if showPaths {
+					suffix += " " + inst.Path
+				}
+			}
+			fmt.Printf("  v%s%s\n", full, suffix)
+		}
 	}
 	return nil
 }
 
 func printUsage() {
-	fmt.Println("usage: go-camoufox <fetch|info|install-driver|list|path|run|server|version>")
+	fmt.Println("usage: go-camoufox <active|fetch|info|install-driver|list|path|remove|run|server|set|sync|version>")
 }
 
 type repeatFlag []string

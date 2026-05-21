@@ -65,3 +65,24 @@ built, err := camoufox.BuildLaunchOptions(opts)
 server, err := camoufox.LaunchServerHandle(ctx, built)
 defer server.Close()
 ```
+
+## Extra Playwright Launch Options
+
+Python Camoufox forwards Playwright launch keyword arguments through
+`**launch_options`. Go exposes the same behavior through `LaunchOptions.Extra`
+with validation:
+
+```go
+browser, err := camoufox.New(ctx, &camoufox.LaunchOptions{
+    Extra: map[string]any{
+        "downloadsPath": "downloads",
+        "slowMo":        100,
+        "timeout":       30_000,
+        "tracesDir":     "traces",
+    },
+})
+```
+
+Managed Camoufox fields such as `headless`, `args`, `env`, `proxy`,
+`executablePath`, and `firefoxUserPrefs` are rejected in `Extra`; use the typed
+Go fields for those.
