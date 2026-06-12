@@ -18,7 +18,7 @@ import (
 	"github.com/brainplusplus/go-camoufox/protocol/bidi"
 )
 
-var version = "0.2.1"
+var version = "0.2.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

@@ -2,3 +2,7 @@
 dist/
 # CocoIndex Code (ccc)
 /.cocoindex_code/
+.opencode-context.md
+sprints
+.venv-ref
+.opencode-jce

@@ -94,6 +94,13 @@ type HTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// ipCall represents an in-flight or completed PublicIP lookup.
+type ipCall struct {
+	done chan struct{}
+	val  string
+	err  error
+}
+
 var (
 	PublicIPURLs = []string{
 		"https://api.ipify.org",
@@ -106,18 +113,49 @@ var (
 	defaultPublicIPClient          = &http.Client{Timeout: 5 * time.Second}
 	PublicIPClient        HTTPDoer = defaultPublicIPClient
 
-	publicIPCacheMu sync.Mutex
-	publicIPCache   = map[string]string{}
+	publicIPMu     sync.Mutex
+	publicIPCache  = map[string]string{}
+	publicIPFlight = map[string]*ipCall{}
 )
 
 func PublicIP(ctx context.Context, proxyString string) (string, error) {
-	publicIPCacheMu.Lock()
+	publicIPMu.Lock()
+	// Fast path: already cached.
 	if value, ok := publicIPCache[proxyString]; ok {
-		publicIPCacheMu.Unlock()
+		publicIPMu.Unlock()
 		return value, nil
 	}
-	publicIPCacheMu.Unlock()
+	// Deduplicate: if another goroutine is already fetching for this proxy, wait for it.
+	if call, ok := publicIPFlight[proxyString]; ok {
+		publicIPMu.Unlock()
+		select {
+		case <-call.done:
+			return call.val, call.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	// This goroutine owns the fetch.
+	call := &ipCall{done: make(chan struct{})}
+	publicIPFlight[proxyString] = call
+	publicIPMu.Unlock()
 
+	// Ensure waiters are always unblocked, even on panic.
+	defer func() {
+		publicIPMu.Lock()
+		if call.err == nil && call.val != "" {
+			publicIPCache[proxyString] = call.val
+		}
+		delete(publicIPFlight, proxyString)
+		publicIPMu.Unlock()
+		close(call.done)
+	}()
+
+	call.val, call.err = fetchPublicIP(ctx, proxyString)
+	return call.val, call.err
+}
+
+func fetchPublicIP(ctx context.Context, proxyString string) (string, error) {
 	var lastErr error
 	for _, endpoint := range PublicIPURLs {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -149,9 +187,6 @@ func PublicIP(ctx context.Context, proxyString string) (string, error) {
 			lastErr = err
 			continue
 		}
-		publicIPCacheMu.Lock()
-		publicIPCache[proxyString] = ip
-		publicIPCacheMu.Unlock()
 		return ip, nil
 	}
 	return "", fmt.Errorf("failed to get IP address: %w", lastErr)

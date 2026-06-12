@@ -2,15 +2,21 @@ package addons
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	camoufox "github.com/brainplusplus/go-camoufox/internal/types"
 )
+
+// addonDownloadTimeout is the maximum time allowed for downloading a single addon.
+const addonDownloadTimeout = 60 * time.Second
 
 const UBOURL = "https://addons.mozilla.org/firefox/downloads/latest/ublock-origin/latest.xpi"
 
@@ -21,6 +27,17 @@ var DefaultAddonURLs = map[camoufox.DefaultAddon]string{
 var DefaultAddonNames = map[camoufox.DefaultAddon]string{
 	camoufox.AddonUBO: "UBO",
 }
+
+// addonCall represents an in-flight or completed addon download.
+type addonCall struct {
+	done chan struct{}
+	err  error
+}
+
+var (
+	addonMu     sync.Mutex
+	addonFlight = map[string]*addonCall{}
+)
 
 func AddDefaultAddons(addons *[]string, exclude []camoufox.DefaultAddon) error {
 	excluded := make(map[camoufox.DefaultAddon]struct{}, len(exclude))
@@ -73,7 +90,13 @@ func DownloadAndExtract(url, extractPath, name string) error {
 	defer os.Remove(tmpName)
 	defer tmp.Close()
 
-	resp, err := http.Get(url) //nolint:gosec // User-visible addon URL mirrors upstream Camoufox behavior.
+	ctx, cancel := context.WithTimeout(context.Background(), addonDownloadTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("download addon %s: %w", name, err)
+	}
+	resp, err := http.DefaultClient.Do(req) //nolint:bodyclose // Body is closed below after copy.
 	if err != nil {
 		return fmt.Errorf("download addon %s: %w", name, err)
 	}
@@ -82,7 +105,7 @@ func DownloadAndExtract(url, extractPath, name string) error {
 		return fmt.Errorf("download addon %s: %s", name, resp.Status)
 	}
 	if _, err := io.Copy(tmp, resp.Body); err != nil {
-		return err
+		return fmt.Errorf("download addon %s: %w", name, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
@@ -113,9 +136,41 @@ func CacheDir() (string, error) {
 }
 
 func ensureAddon(url, path, name string) error {
+	// Fast path: addon already exists.
 	if _, err := os.Stat(filepath.Join(path, "manifest.json")); err == nil {
 		return nil
 	}
+
+	addonMu.Lock()
+	// Re-check after acquiring lock (another goroutine may have completed).
+	if _, err := os.Stat(filepath.Join(path, "manifest.json")); err == nil {
+		addonMu.Unlock()
+		return nil
+	}
+	// Deduplicate: if another goroutine is already downloading this addon, wait for it.
+	if call, ok := addonFlight[path]; ok {
+		addonMu.Unlock()
+		<-call.done
+		return call.err
+	}
+	// This goroutine owns the download.
+	call := &addonCall{done: make(chan struct{})}
+	addonFlight[path] = call
+	addonMu.Unlock()
+
+	// Ensure waiters are always unblocked, even on panic.
+	defer func() {
+		addonMu.Lock()
+		delete(addonFlight, path)
+		addonMu.Unlock()
+		close(call.done)
+	}()
+
+	call.err = doEnsureAddon(url, path, name)
+	return call.err
+}
+
+func doEnsureAddon(url, path, name string) error {
 	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
